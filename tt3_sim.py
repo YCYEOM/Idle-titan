@@ -89,6 +89,15 @@ class Config:
     # 1.0이면 번아웃 없음(순수 온보딩 효과만 관측). ★ 실측 없는 '가정' 파라미터.
     onboarding_burnout_factor: float = 1.0
 
+    # --- 내생적 번아웃 (보상 포만도 → 리텐션 피드백) ---
+    # 가설: 일일 보상이 '만족 기준선'을 초과할수록 포만도(satiation)가 쌓이고,
+    # 포만도가 높을수록 다음 날 접속 확률이 지수적으로 감소한다(콘텐츠 소진).
+    # 포만도는 매일 일부 회복(휴식)되어 동적 평형을 이룬다. ★ 실측 없는 행동 가정.
+    burnout_enabled: bool = False
+    burnout_ref_daily: float = 1940.0   # 만족 기준 일일 균열석 성장단위(D형 baseline)
+    burnout_sensitivity: float = 1.1    # 누적 포만도 → 이탈 해저드 계수
+    burnout_recovery: float = 0.75      # 매일 포만도 잔존율(<1이면 자연 회복)
+
     # --- 축복 3택1 (랜덤성 주입원) ---
     # (확률, 다음 세션까지 적용되는 배율, 클립트리거 여부)
     blessing_table: Tuple[Tuple[float, float, bool], ...] = (
@@ -177,6 +186,7 @@ class Player:
         self.rng = rng
         self.retention = retention      # None이면 상시 접속(게이트 없음)
         self.active_days = 0            # 실제 접속한 일수(리텐션 통과)
+        self.satiation = 0.0           # 내생 번아웃 포만도 누적
 
         self.t = 0.0                    # 시뮬레이션 절대 시각(시)
         self.smax_base = cfg.smax_initial
@@ -346,14 +356,24 @@ class Player:
                     break
         return best
 
+    # ---- 그날 접속(활성) 확률: 리텐션 곡선 × 번아웃 포만도 감쇠 ----
+    def active_prob(self, day: int) -> float:
+        base = self.retention.prob(day) if self.retention is not None else 1.0
+        if self.cfg.burnout_enabled:
+            base *= math.exp(-self.cfg.burnout_sensitivity * self.satiation)
+        return base
+
     # ---- 하루 실행 ----
     def run_day(self, day: int) -> None:
         day_start = day * 24.0
 
-        # ★ 리텐션 게이트: 곡선이 있으면 그날 접속 여부를 확률로 판정.
+        # ★ 접속 게이트: 리텐션 곡선 + 내생 번아웃(포만도)으로 그날 접속 여부 판정.
         #   미접속일에도 1층 금화는 오프라인 누적(체크인 빈도와 무관 설계 유지),
-        #   2층 균열석/연쇄는 발생하지 않는다.
-        if self.retention is not None and self.rng.random() > self.retention.prob(day):
+        #   2층 균열석/연쇄는 발생하지 않으며, 포만도는 자연 회복된다.
+        #   게이트가 비활성(리텐션·번아웃 모두 off)이면 난수를 소비하지 않아
+        #   기존 시뮬레이션 결과와 완전히 동일하게 재현된다.
+        gate_active = self.retention is not None or self.cfg.burnout_enabled
+        if gate_active and self.rng.random() > self.active_prob(day):
             snap_gold, snap_rift = self.gold_units, self.rift_units
             self.accrue_gold(day_start + 24.0)
             self.daily_log.append({
@@ -365,6 +385,8 @@ class Player:
                 "checkins": 0,
             })
             self.chain_today = 0
+            if self.cfg.burnout_enabled:
+                self.satiation *= self.cfg.burnout_recovery
             return
 
         self.active_days += 1
@@ -401,6 +423,11 @@ class Player:
                 "checkins": self.checkins - checks_before,
             }
         )
+        # ★ 번아웃 포만도 갱신: 오늘 보상이 기준선 초과분만큼 누적(+자연 회복)
+        if self.cfg.burnout_enabled:
+            day_rift = self.rift_units - snap_rift
+            excess = max(0.0, day_rift / max(1e-9, self.cfg.burnout_ref_daily) - 1.0)
+            self.satiation = self.satiation * self.cfg.burnout_recovery + excess
         self.chain_today = 0            # 일일 연쇄 초기화
 
 
@@ -1034,6 +1061,222 @@ def plot_longterm(
 
 
 # ============================================================
+# 5g. 내생 번아웃 손익분기 탐색 (보상강도 ↔ 리텐션)
+# ============================================================
+
+# 보상강도 대리 노브: rift_to_unit(2층 가치). 높을수록 일일 보상↑ → 포만도↑ → 이탈↑
+BURNOUT_KNOB: Tuple[float, ...] = (2.2, 2.8, 3.4, 4.0, 4.6, 5.2, 5.8, 6.4, 7.0)
+
+
+def analyze_burnout_breakeven(
+    cfg: Config, days: int = 60, trials: int = 300, seed0: int = 1,
+) -> List[Dict[str, float]]:
+    """보상강도(rift_to_unit)를 올릴 때 내생 번아웃이 성장을 언제 갉아먹는지 탐색.
+
+    번아웃 OFF에서는 보상강도↑ = 성장단위 단조 증가.
+    번아웃 ON에서는 보상강도↑ → 포만도↑ → 활성일↓ → 성장단위가 어느 지점에서
+    정점(손익분기)을 찍고 꺾인다. 그 정점이 '유저를 태우지 않는 최대 보상강도'.
+    """
+    print("\n" + BAR)
+    print(f" 내생 번아웃 손익분기 | D_쇼츠유입 | {days}일 × {trials}회 | 리텐션 곡선 적용")
+    print(BAR)
+    print(f"{'rift_to_unit':>12}{'활성일(ON)':>11}{'성장단위(ON)':>14}"
+          f"{'성장단위(OFF)':>14}{'ON/OFF':>9}")
+    print("-" * 76)
+
+    rows: List[Dict[str, float]] = []
+    for r in BURNOUT_KNOB:
+        c_on = replace(cfg, rift_to_unit=r, burnout_enabled=True,
+                       onboarding_burnout_factor=1.0)
+        c_off = replace(cfg, rift_to_unit=r, burnout_enabled=False)
+        u_on, a_on = [], []
+        u_off = []
+        for k in range(trials):
+            p_on = simulate(c_on, "D_쇼츠유입", days, seed0 + k * 7919,
+                            apply_retention=True)
+            u_on.append(growth_units(p_on, c_on))
+            a_on.append(p_on.active_days)
+            p_off = simulate(c_off, "D_쇼츠유입", days, seed0 + k * 7919,
+                             apply_retention=True)
+            u_off.append(growth_units(p_off, c_off))
+        m_on, m_act, m_off = (statistics.fmean(u_on), statistics.fmean(a_on),
+                              statistics.fmean(u_off))
+        rows.append({"rift_to_unit": r, "units_on": m_on, "active_on": m_act,
+                     "units_off": m_off, "ratio": m_on / max(1e-9, m_off)})
+        print(f"{r:>12.1f}{m_act:>11.1f}{m_on:>14,.0f}{m_off:>14,.0f}"
+              f"{m_on/max(1e-9,m_off):>9.3f}")
+    print("-" * 76)
+
+    peak = max(rows, key=lambda x: x["units_on"])
+    print(f" 번아웃 ON 성장 정점(손익분기): rift_to_unit={peak['rift_to_unit']:.1f} "
+          f"→ 이 이상 보상을 키우면 이탈이 성장을 상쇄")
+    # 정점 이후 꺾임 여부
+    idx = rows.index(peak)
+    turned = idx < len(rows) - 1 and rows[idx + 1]["units_on"] < peak["units_on"]
+    print(f" 정점 이후 꺾임 관측: {'✓ (번아웃이 과보상을 처벌)' if turned else '✗ (탐색 구간 내 미도달 — 상한 확장 필요)'}")
+    print(BAR)
+    print(" ※ 번아웃은 실측 없는 행동 '가정'. sensitivity/recovery 캘리브레이션에 결과가 민감함.")
+    print(BAR)
+    return rows
+
+
+def plot_burnout_breakeven(
+    rows: List[Dict[str, float]], path: str = "burnout_breakeven.png") -> None:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("\n[matplotlib 미설치 → 위 표 참조]")
+        return
+    xs = [r["rift_to_unit"] for r in rows]
+    fig, ax1 = plt.subplots(figsize=(8.5, 5.5))
+    ax1.plot(xs, [r["units_off"] for r in rows], "o--", color="#999",
+             label="units (burnout OFF)")
+    ax1.plot(xs, [r["units_on"] for r in rows], "o-", color="#c44e52",
+             label="units (burnout ON)")
+    peak = max(rows, key=lambda x: x["units_on"])
+    ax1.axvline(peak["rift_to_unit"], color="#c44e52", ls=":", lw=1.2)
+    ax1.set_xlabel("rift_to_unit (reward intensity)")
+    ax1.set_ylabel("60-day growth units")
+    ax2 = ax1.twinx()
+    ax2.plot(xs, [r["active_on"] for r in rows], "s-", color="#4c72b0",
+             label="active days (ON)")
+    ax2.set_ylabel("active days (burnout ON)", color="#4c72b0")
+    ax2.tick_params(axis="y", labelcolor="#4c72b0")
+    lines1, lab1 = ax1.get_legend_handles_labels()
+    lines2, lab2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, lab1 + lab2, loc="center right")
+    ax1.set_title("Endogenous burnout breakeven\n(reward intensity vs retention)")
+    ax1.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+    print(f"\n번아웃 손익분기 그래프 저장: {path}")
+
+
+# ============================================================
+# 5h. 3지표 동시 탐색 (B/A · 연쇄기여 · 2층비중)
+# ============================================================
+
+L2_LO, L2_HI = 0.40, 0.55        # 2층 비중 권장 구간
+
+GRID3_SCALE: Tuple[float, ...] = (8.0, 11.0, 14.0)
+GRID3_RIFT: Tuple[float, ...] = (2.2, 2.6, 3.0, 3.4)
+GRID3_GOLD: Tuple[float, ...] = (70.0, 85.0, 100.0, 115.0)
+
+
+def _metrics_3(cfg: Config, days: int, trials: int, seed0: int = 1
+               ) -> Tuple[float, float, float]:
+    """(B/A 비율, B형 연쇄기여, B형 2층비중) 산출."""
+    def agg(name: str) -> Tuple[float, float, float]:
+        us, ch, l2 = [], [], []
+        for k in range(trials):
+            p = simulate(cfg, name, days, seed0 + k * 7919)
+            gu = growth_units(p, cfg)
+            us.append(gu)
+            ch.append(p.rift_from_chain / max(1e-9, gu))
+            l2.append(layer2_share(p, cfg))
+        return statistics.fmean(us), statistics.fmean(ch), statistics.fmean(l2)
+
+    a_u, _, _ = agg("A_저빈도")
+    b_u, b_ch, b_l2 = agg("B_타깃")
+    return b_u / max(1e-9, a_u), b_ch, b_l2
+
+
+def grid_search_3d(
+    cfg: Config, days: int = 30, trials: int = 40, seed0: int = 1,
+) -> List[Dict[str, object]]:
+    """chain_scale × rift_to_unit × gold_per_hour 3-노브 탐색.
+
+    3제약 동시 만족:
+      B/A ∈ [1.60,1.80]  AND  연쇄기여 ∈ [8%,12%]  AND  2층비중 ∈ [40%,55%]
+    2D에서는 낮은 rift_to_unit이 B/A를 낮추지만 2층비중까지 함께 낮춰
+    40% 밑으로 이탈하는 긴장이 있었다. gold_per_hour(1층 가치)를 3번째 축으로
+    더해 2층비중을 독립적으로 끌어올릴 여지를 탐색한다.
+    """
+    base = cfg.chain_mults
+    print("\n" + BAR)
+    print(f" 3D 그리드 (chain_scale × rift_to_unit × gold_per_hour) | {days}일 × {trials}회")
+    print(f" 제약: B/A∈[{BA_LO},{BA_HI}]  연쇄∈[{int(CHAIN_LO*100)},{int(CHAIN_HI*100)}%]  "
+          f"2층∈[{int(L2_LO*100)},{int(L2_HI*100)}%]")
+    print(BAR)
+
+    rows: List[Dict[str, object]] = []
+    for scale in GRID3_SCALE:
+        for r2u in GRID3_RIFT:
+            for gold in GRID3_GOLD:
+                mults = _scaled_mults(base, scale)
+                cfg2 = replace(cfg, chain_mults=mults, rift_to_unit=r2u,
+                               gold_per_hour=gold)
+                ratio, chain, l2 = _metrics_3(cfg2, days, trials, seed0)
+                ok_ba = BA_LO <= ratio <= BA_HI
+                ok_ch = CHAIN_LO <= chain <= CHAIN_HI
+                ok_l2 = L2_LO <= l2 <= L2_HI
+                valid = ok_ba and ok_ch and ok_l2
+                score = (abs(chain - CHAIN_TARGET) * 10.0 + abs(ratio - 1.70)
+                         + abs(l2 - 0.475) * 4.0)
+                rows.append({
+                    "scale": scale, "rift_to_unit": r2u, "gold": gold, "mults": mults,
+                    "ratio": ratio, "chain": chain, "l2": l2,
+                    "ok_ba": ok_ba, "ok_ch": ok_ch, "ok_l2": ok_l2,
+                    "valid": valid, "score": score,
+                })
+
+    valid_rows = sorted([r for r in rows if r["valid"]], key=lambda r: r["score"])
+    print(f"{'순위':<4}{'scale':>6}{'r2u':>6}{'gold':>6}{'B/A':>8}"
+          f"{'연쇄':>7}{'2층':>7}   판정")
+    print("-" * 76)
+    src = valid_rows[:5] if valid_rows else sorted(rows, key=lambda r: r["score"])[:5]
+    for i, r in enumerate(src, 1):
+        flags = ("BA" + ("○" if r["ok_ba"] else "×") + " 연쇄" + ("○" if r["ok_ch"] else "×")
+                 + " 2층" + ("○" if r["ok_l2"] else "×"))
+        tag = "✓" if r["valid"] else "≈"
+        print(f"{i:<4}{r['scale']:>6.0f}{r['rift_to_unit']:>6.1f}{r['gold']:>6.0f}"
+              f"{r['ratio']:>8.3f}{r['chain']*100:>6.1f}%{r['l2']*100:>6.1f}%  {tag} {flags}")
+    print("-" * 76)
+    print(f" 탐색 {len(rows)}개 중 3제약 동시 만족 {len(valid_rows)}개")
+    if not valid_rows:
+        print(" → 3제약 동시 만족 불가: 아래 산점도에서 어느 제약이 상충하는지 확인")
+    print(BAR)
+    return rows
+
+
+def plot_grid_3d(rows: List[Dict[str, object]], path: str = "chain_grid_3d.png") -> None:
+    """3D 탐색 산점도: x=B/A, y=연쇄%, 색=2층비중%, 3제약 만족점은 검은 테두리."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("\n[matplotlib 미설치 → 위 표 참조]")
+        return
+    fig, ax = plt.subplots(figsize=(8.8, 6))
+    ax.axvspan(BA_LO, BA_HI, color="#cfe8cf", alpha=0.30, zorder=0)
+    ax.axhspan(CHAIN_LO * 100, CHAIN_HI * 100, color="#cfd8e8", alpha=0.30, zorder=0)
+    xs = [r["ratio"] for r in rows]
+    ys = [r["chain"] * 100 for r in rows]
+    cs = [r["l2"] * 100 for r in rows]
+    edge = ["black" if r["valid"] else "none" for r in rows]
+    lw = [1.8 if r["valid"] else 0.0 for r in rows]
+    sc = ax.scatter(xs, ys, c=cs, cmap="coolwarm", s=85, zorder=2,
+                    edgecolors=edge, linewidths=lw, vmin=30, vmax=60)
+    cb = fig.colorbar(sc, ax=ax)
+    cb.set_label("layer-2 share (%)  [target 40-55]")
+    ax.axvline(1.70, color="#666", ls="--", lw=0.8)
+    ax.axhline(CHAIN_TARGET * 100, color="#666", ls="--", lw=0.8)
+    ax.set_xlabel("B/A ratio")
+    ax.set_ylabel("Chain contribution (%)")
+    ax.set_title("3D grid: B/A x chain x layer-2 share\n"
+                 "(black edge = all 3 targets met; color = layer-2 share)")
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+    print(f"\n3D 산점도 저장: {path}")
+
+
+# ============================================================
 # 6. 엔트리포인트
 # ============================================================
 
@@ -1057,6 +1300,10 @@ def main() -> None:
                     help="그리드 산점도 저장 경로")
     ap.add_argument("--longterm", action="store_true",
                     help="온보딩 60일 장기 부작용(번아웃) 분석")
+    ap.add_argument("--burnout", action="store_true",
+                    help="내생 번아웃 보상강도↔리텐션 손익분기 탐색")
+    ap.add_argument("--grid3d", action="store_true",
+                    help="B/A·연쇄기여·2층비중 3지표 동시 탐색")
     ap.add_argument("--longterm-days", type=int, default=60)
     ap.add_argument("--burnout-factor", type=float, default=0.6,
                     help="번아웃 시나리오의 리텐션 감쇠 가속 계수(<1)")
@@ -1093,6 +1340,15 @@ def main() -> None:
         plot_longterm(
             cfg, days=args.longterm_days, trials=min(args.trials, 200),
             burnout_factor=args.burnout_factor, path="onboarding_longterm.png")
+
+    if args.burnout:
+        brows = analyze_burnout_breakeven(
+            cfg, days=args.longterm_days, trials=args.trials)
+        plot_burnout_breakeven(brows, "burnout_breakeven.png")
+
+    if args.grid3d:
+        rows3d = grid_search_3d(cfg, days=args.grid_days, trials=args.grid_trials)
+        plot_grid_3d(rows3d, "chain_grid_3d.png")
 
     if args.sweep:
         rows = run_sweep(cfg, args.days, args.sweep_trials)
