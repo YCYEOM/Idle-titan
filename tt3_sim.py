@@ -84,6 +84,12 @@ class Config:
     # 장기 곡선(B/A 밸런스)에는 영향을 주지 않는다.
     onboarding: bool = False            # True일 때만 온보딩 예외 활성화
     onboarding_tau_h: float = 0.8       # ★ 첫 회차 한정 진행 시상수
+    # ① 예외 창 확대: tau 단축을 첫 N회 승급까지 적용 (1 = 기존 첫 회차 한정)
+    onboarding_prestiges: int = 1
+    # ③ 직접 부스트: 초반 onboarding_boost_days일간 균열석 획득에 배율 적용
+    #   (1.0 = 없음). 유물 log 환류를 우회해 각인→s_max로 직접 복리 전달된다.
+    onboarding_boost_mult: float = 1.0
+    onboarding_boost_days: int = 7
     # 번아웃 계수: 온보딩 유저의 초반 과보상이 콘텐츠 소진을 앞당긴다는 가설.
     # <1.0이면 온보딩 유저의 리텐션 감쇠 시상수를 그만큼 단축(=조기 이탈 가속).
     # 1.0이면 번아웃 없음(순수 온보딩 효과만 관측). ★ 실측 없는 '가정' 파라미터.
@@ -252,6 +258,14 @@ class Player:
                 return mult
         return self.cfg.freshness_floor
 
+    # ---- ③ 온보딩 직접 부스트 배율 (초반 N일 한정) ----
+    def onboarding_boost(self) -> float:
+        if not self.cfg.onboarding or self.cfg.onboarding_boost_mult <= 1.0:
+            return 1.0
+        if int(self.t // 24.0) >= self.cfg.onboarding_boost_days:
+            return 1.0
+        return self.cfg.onboarding_boost_mult
+
     # ---- 체크인 1회 ----
     def check_in(self, now: float) -> None:
         self.accrue_gold(now)
@@ -263,6 +277,7 @@ class Player:
 
         # 신선도 적용
         raw = sum(self.cfg.stack_base * self.freshness(now - born) for born in self.stacks)
+        raw *= self.onboarding_boost()   # ③ 초반 부스트
 
         # 연쇄 판정
         within = (now - self.last_collect_t) <= self.cfg.chain_window_h
@@ -318,7 +333,7 @@ class Player:
         # ★ 온보딩 예외: 첫 승급(prestige_count == 0)에만 짧은 tau_h를 적용.
         #   짧은 시상수는 exp 항을 빠르게 0으로 보내 stage를 s_max에 근접시키고,
         #   결과적으로 초반 유물을 크게 부여해 신규 유저의 진도를 끌어올린다.
-        if self.cfg.onboarding and self.prestige_count == 0:
+        if self.cfg.onboarding and self.prestige_count < self.cfg.onboarding_prestiges:
             tau = self.cfg.onboarding_tau_h
         else:
             tau = self.cfg.tau_h
@@ -1277,6 +1292,313 @@ def plot_grid_3d(rows: List[Dict[str, object]], path: str = "chain_grid_3d.png")
 
 
 # ============================================================
+# 5i. 번아웃 캘리브레이션 — 기저 리텐션 곡선 역산 피팅
+# ============================================================
+
+# 관측 대상(스펙 곡선의 D7/D30). 번아웃을 켜면 실현 리텐션이 스펙보다 낮아지므로,
+# 기저 곡선을 역산해 '실현 = 스펙'이 되도록 맞춰야 이중 계상이 사라진다.
+PROBE_DAYS: Tuple[int, ...] = (6, 29)          # 0-indexed → D7, D30
+FIT_DECAY_GRID: Tuple[float, ...] = (6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
+FIT_PINF_GRID: Tuple[float, ...] = (0.12, 0.15, 0.18, 0.21, 0.24, 0.27, 0.30)
+
+
+def _realized_retention(
+    cfg: Config, curve: RetentionCurve, days: int, trials: int, seed0: int = 1,
+) -> Dict[int, float]:
+    """주어진 기저 곡선으로 시뮬레이션했을 때 '실현' 접속률(D7/D30)을 측정."""
+    acc = {d: 0.0 for d in PROBE_DAYS}
+    for k in range(trials):
+        p = simulate(cfg, "D_쇼츠유입", days, seed0 + k * 7919, retention=curve)
+        for d in PROBE_DAYS:
+            if d < len(p.daily_log):
+                acc[d] += p.daily_log[d]["active"]
+    return {d: acc[d] / trials for d in PROBE_DAYS}
+
+
+def calibrate_burnout(
+    cfg: Config, sensitivities: Tuple[float, ...] = (0.5, 1.1, 2.0),
+    days: int = 30, trials: int = 150, seed0: int = 1,
+) -> Dict[float, Tuple[RetentionCurve, float]]:
+    """번아웃 민감도별로 기저 리텐션 곡선을 역산 피팅한다.
+
+    문제 정의: 스펙 곡선(D7 44.4%, D30 12.7%)은 '현재 보상강도에서 관측된'
+    리텐션이다. 번아웃을 켠 채 그 곡선을 그대로 기저로 쓰면 이탈이 이중 계상된다.
+    따라서 민감도 s마다 (decay_days, p_inf)를 다시 맞춰 '실현 = 스펙'을 만든다.
+
+    ★ 식별성 한계: 단일 운영점(현재 보상강도) 관측만으로는 민감도 s 자체를
+      식별할 수 없다. s는 '보상강도를 바꿨을 때 얼마나 이탈이 반응하는가'이므로
+      서로 다른 보상강도의 2개 운영점(A/B 테스트)이 있어야 특정된다.
+      여기서는 s를 시나리오 축으로 두고, 각 s에 대해 식별 가능한 기저 곡선만
+      역산한 뒤, 손익분기가 s에 얼마나 민감한지를 범위로 보고한다.
+    """
+    targets = {d: SHORTS_RETENTION.prob(d) for d in PROBE_DAYS}
+    print("\n" + BAR)
+    print(f" 번아웃 캘리브레이션 | 기저 리텐션 역산 | {days}일 × {trials}회")
+    print(BAR)
+    print(f" 관측 타깃(스펙): D7={targets[6]*100:.1f}%  D30={targets[29]*100:.1f}%")
+    print(f" 기준선 보상: burnout_ref_daily={cfg.burnout_ref_daily:,.0f} (D형 활성일 실측 평균)")
+    print("-" * 76)
+    print(f"{'민감도':>7}{'decay_days':>12}{'p_inf':>8}{'실현D7':>9}{'실현D30':>9}{'잔차(RMSE)':>12}")
+    print("-" * 76)
+
+    fitted: Dict[float, Tuple[RetentionCurve, float]] = {}
+    for s in sensitivities:
+        c = replace(cfg, burnout_enabled=True, burnout_sensitivity=s)
+        best, best_sse, best_real = None, float("inf"), {}
+        for decay in FIT_DECAY_GRID:
+            for pinf in FIT_PINF_GRID:
+                curve = replace(SHORTS_RETENTION, decay_days=decay, p_inf=pinf)
+                real = _realized_retention(c, curve, days, trials, seed0)
+                sse = sum((real[d] - targets[d]) ** 2 for d in PROBE_DAYS)
+                if sse < best_sse:
+                    best, best_sse, best_real = curve, sse, real
+        rmse = math.sqrt(best_sse / len(PROBE_DAYS))
+        fitted[s] = (best, rmse)
+        print(f"{s:>7.1f}{best.decay_days:>12.1f}{best.p_inf:>8.2f}"
+              f"{best_real[6]*100:>8.1f}%{best_real[29]*100:>8.1f}%{rmse*100:>11.2f}%p")
+    print("-" * 76)
+    print(" → 민감도가 클수록 같은 실현 리텐션을 내려면 기저 곡선이 더 완만해야 한다")
+    print("   (번아웃이 떠안는 이탈 몫이 커지므로). 이제 기저는 실측에 고정되었고,")
+    print("   남은 자유도는 민감도 s 하나뿐 → 아래 손익분기를 s별 범위로 보고한다.")
+    print(BAR)
+    return fitted
+
+
+def breakeven_across_sensitivity(
+    cfg: Config, fitted: Dict[float, Tuple[RetentionCurve, float]],
+    days: int = 60, trials: int = 150, seed0: int = 1,
+) -> Dict[float, float]:
+    """캘리브레이션된 기저 곡선으로 민감도별 보상강도 손익분기를 재산출."""
+    print("\n" + BAR)
+    print(f" 캘리브레이션 후 손익분기 (민감도 민감도 분석) | {days}일 × {trials}회")
+    print(BAR)
+    header = f"{'rift_to_unit':>13}" + "".join(f"{'s=%.1f' % s:>14}" for s in fitted)
+    print(header)
+    print("-" * len(header))
+
+    table: Dict[float, List[float]] = {s: [] for s in fitted}
+    for r in BURNOUT_KNOB:
+        line = f"{r:>13.1f}"
+        for s, (curve, _) in fitted.items():
+            c = replace(cfg, rift_to_unit=r, burnout_enabled=True,
+                        burnout_sensitivity=s, onboarding_burnout_factor=1.0)
+            us = [growth_units(simulate(c, "D_쇼츠유입", days, seed0 + k * 7919,
+                                        retention=curve), c) for k in range(trials)]
+            m = statistics.fmean(us)
+            table[s].append(m)
+            line += f"{m:>14,.0f}"
+        print(line)
+    print("-" * len(header))
+
+    peaks: Dict[float, float] = {}
+    for s in fitted:
+        idx = max(range(len(BURNOUT_KNOB)), key=lambda i: table[s][i])
+        peaks[s] = BURNOUT_KNOB[idx]
+    print(" 손익분기(성장 정점) rift_to_unit:")
+    for s, r in peaks.items():
+        print(f"   민감도 s={s:.1f} → r*={r:.1f}")
+    lo, hi = min(peaks.values()), max(peaks.values())
+    print(f" → 손익분기 범위: r* ∈ [{lo:.1f}, {hi:.1f}]  (민감도 미식별 구간)")
+    print(f" → 이 범위를 한 점으로 좁히려면 서로 다른 보상강도 2개 운영점의")
+    print(f"   리텐션 A/B 실측이 필요하다(현재 기저는 실측 고정, 민감도만 미정).")
+    print(BAR)
+    return peaks
+
+
+# ============================================================
+# 5j. 4제약 동시 탐색 (B/A · 연쇄 · 2층 + 번아웃 안전)
+# ============================================================
+
+BURNOUT_SAFE_LOSS = 0.10          # 활성일 손실 허용 상한 (10%)
+
+
+def _burnout_active_loss(
+    cfg: Config, curve: RetentionCurve, days: int, trials: int, seed0: int = 1,
+) -> float:
+    """번아웃 ON/OFF 활성일수 손실률 (1 - on/off)."""
+    on, off = [], []
+    for k in range(trials):
+        c_on = replace(cfg, burnout_enabled=True)
+        c_off = replace(cfg, burnout_enabled=False)
+        on.append(simulate(c_on, "D_쇼츠유입", days, seed0 + k * 7919,
+                           retention=curve).active_days)
+        off.append(simulate(c_off, "D_쇼츠유입", days, seed0 + k * 7919,
+                            retention=curve).active_days)
+    a_on, a_off = statistics.fmean(on), statistics.fmean(off)
+    return 1.0 - a_on / max(1e-9, a_off)
+
+
+def grid_search_4d(
+    cfg: Config, curve: RetentionCurve, sensitivity: float,
+    days: int = 30, trials: int = 40, burn_days: int = 60, burn_trials: int = 80,
+    seed0: int = 1,
+) -> List[Dict[str, object]]:
+    """3개 밸런스 제약 + 번아웃 안전을 동시에 만족하는 조합 탐색.
+
+    비용 절감을 위해 2단계로 거른다:
+      1단계 — B/A·연쇄·2층 3제약을 통과한 조합만 추린다(저렴).
+      2단계 — 통과 조합에 대해서만 D형 번아웃 활성일 손실을 측정한다(고가).
+    """
+    base = cfg.chain_mults
+    print("\n" + BAR)
+    print(f" 4제약 동시 탐색 | 밸런스 {days}일×{trials}회 + 번아웃 {burn_days}일×{burn_trials}회")
+    print(f" 제약: B/A∈[{BA_LO},{BA_HI}]  연쇄∈[{int(CHAIN_LO*100)},{int(CHAIN_HI*100)}%]  "
+          f"2층∈[{int(L2_LO*100)},{int(L2_HI*100)}%]  활성일손실≤{int(BURNOUT_SAFE_LOSS*100)}% (s={sensitivity})")
+    print(BAR)
+
+    stage1: List[Dict[str, object]] = []
+    for scale in GRID3_SCALE:
+        for r2u in GRID3_RIFT:
+            for gold in GRID3_GOLD:
+                cfg2 = replace(cfg, chain_mults=_scaled_mults(base, scale),
+                               rift_to_unit=r2u, gold_per_hour=gold)
+                ratio, chain, l2 = _metrics_3(cfg2, days, trials, seed0)
+                ok = (BA_LO <= ratio <= BA_HI and CHAIN_LO <= chain <= CHAIN_HI
+                      and L2_LO <= l2 <= L2_HI)
+                stage1.append({"scale": scale, "rift_to_unit": r2u, "gold": gold,
+                               "cfg": cfg2, "ratio": ratio, "chain": chain,
+                               "l2": l2, "balance_ok": ok})
+    passed = [r for r in stage1 if r["balance_ok"]]
+    print(f" 1단계: 밸런스 3제약 통과 {len(passed)}/{len(stage1)}개 → 2단계 번아웃 측정")
+    print("-" * 76)
+    print(f"{'scale':>6}{'r2u':>6}{'gold':>6}{'B/A':>8}{'연쇄':>7}{'2층':>7}"
+          f"{'활성일손실':>11}   판정")
+    print("-" * 76)
+
+    rows: List[Dict[str, object]] = []
+    for r in passed:
+        c = replace(r["cfg"], burnout_sensitivity=sensitivity,
+                    onboarding_burnout_factor=1.0)
+        loss = _burnout_active_loss(c, curve, burn_days, burn_trials, seed0)
+        safe = loss <= BURNOUT_SAFE_LOSS
+        r.update({"active_loss": loss, "safe": safe, "valid": safe})
+        rows.append(r)
+        print(f"{r['scale']:>6.0f}{r['rift_to_unit']:>6.1f}{r['gold']:>6.0f}"
+              f"{r['ratio']:>8.3f}{r['chain']*100:>6.1f}%{r['l2']*100:>6.1f}%"
+              f"{loss*100:>10.1f}%   {'✓ 4제약 만족' if safe else '✗ 번아웃 초과'}")
+    print("-" * 76)
+    valid = [r for r in rows if r["valid"]]
+    print(f" 4제약 동시 만족: {len(valid)}/{len(passed)}개 (전체 {len(stage1)}개 중)")
+    if valid:
+        best = min(valid, key=lambda r: abs(r["chain"] - CHAIN_TARGET))
+        print(f" 권장안: scale={best['scale']:.0f} r2u={best['rift_to_unit']:.1f} "
+              f"gold={best['gold']:.0f} → B/A {best['ratio']:.3f}, 연쇄 {best['chain']*100:.1f}%, "
+              f"2층 {best['l2']*100:.1f}%, 활성일손실 {best['active_loss']*100:.1f}%")
+    else:
+        print(" → 4제약 동시 만족 불가: 연쇄 목표와 번아웃 안전이 구조적으로 상충")
+    print(BAR)
+    return rows
+
+
+# ============================================================
+# 5k. 온보딩 강도 ↔ 번아웃 손익분기 (원래 취지)
+# ============================================================
+
+ONBOARD_INTENSITY: Tuple[float, ...] = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0)
+
+
+def analyze_onboarding_intensity(
+    cfg: Config, curve: RetentionCurve, sensitivity: float,
+    days: int = 60, trials: int = 200, seed0: int = 1,
+) -> List[Dict[str, float]]:
+    """온보딩 강도(초반 부스트 배율)를 올릴 때 번아웃이 언제 이득을 삼키는가.
+
+    ①(예외 창 확대)은 실측상 무효(N=50에도 +0.3%)이므로 강도 축은 ③ 직접 부스트를
+    사용한다. 강도↑ → 초반 보상↑ → 포만도↑ → 이탈↑ 의 내생 피드백이 걸린다.
+    """
+    print("\n" + BAR)
+    print(f" 온보딩 강도 ↔ 번아웃 손익분기 | D_쇼츠유입 | {days}일 × {trials}회 (s={sensitivity})")
+    print(f" 강도 축: ③ 초반 {cfg.onboarding_boost_days}일 균열석 배율 (①은 무효로 기각)")
+    print(BAR)
+    print(f"{'부스트':>7}{'활성일(ON)':>11}{'성장(ON)':>12}{'성장(OFF)':>12}"
+          f"{'ON/OFF':>9}{'D7진도(B대비)':>14}")
+    print("-" * 76)
+
+    # 7일차 B형 진도 기준선(온보딩 무관)
+    b7 = statistics.fmean([growth_units(simulate(cfg, "B_타깃", 7, seed0 + k * 7919), cfg)
+                           for k in range(trials)])
+
+    rows: List[Dict[str, float]] = []
+    for m in ONBOARD_INTENSITY:
+        c_on = replace(cfg, onboarding_boost_mult=m, burnout_enabled=True,
+                       burnout_sensitivity=sensitivity, onboarding_burnout_factor=1.0)
+        c_off = replace(cfg, onboarding_boost_mult=m, burnout_enabled=False)
+        u_on, a_on, u_off, d7 = [], [], [], []
+        for k in range(trials):
+            p_on = simulate(c_on, "D_쇼츠유입", days, seed0 + k * 7919, retention=curve)
+            u_on.append(growth_units(p_on, c_on)); a_on.append(p_on.active_days)
+            p_off = simulate(c_off, "D_쇼츠유입", days, seed0 + k * 7919, retention=curve)
+            u_off.append(growth_units(p_off, c_off))
+            p7 = simulate(c_on, "D_쇼츠유입", 7, seed0 + k * 7919, retention=curve)
+            d7.append(growth_units(p7, c_on))
+        mo, ma, mf = statistics.fmean(u_on), statistics.fmean(a_on), statistics.fmean(u_off)
+        md7 = statistics.fmean(d7) / max(1e-9, b7)
+        rows.append({"mult": m, "units_on": mo, "active_on": ma,
+                     "units_off": mf, "ratio": mo / max(1e-9, mf), "d7_vs_b": md7})
+        print(f"{m:>7.1f}{ma:>11.1f}{mo:>12,.0f}{mf:>12,.0f}"
+              f"{mo/max(1e-9,mf):>9.3f}{md7*100:>13.1f}%")
+    print("-" * 76)
+    u_on = [r["units_on"] for r in rows]
+    spread = (max(u_on) - min(u_on)) / max(1e-9, min(u_on))
+    off_gain = rows[-1]["units_off"] / max(1e-9, rows[0]["units_off"]) - 1.0
+    on_gain = rows[-1]["units_on"] / max(1e-9, rows[0]["units_on"]) - 1.0
+    absorbed = 1.0 - (on_gain / off_gain) if abs(off_gain) > 1e-9 else 1.0
+    print(f" 번아웃 OFF 성장 증가: {off_gain*100:+.1f}%  →  ON 성장 증가: {on_gain*100:+.1f}%")
+    print(f" 번아웃 흡수율: {absorbed*100:.1f}%  "
+          f"(온보딩 증분 중 이탈로 소멸한 비율)")
+    print(f" ON 성장 변동폭: {spread*100:.1f}% → 강도를 6배로 올려도 60일 총 성장은 사실상 평탄")
+    print(f" 활성일: {rows[0]['active_on']:.1f} → {rows[-1]['active_on']:.1f}일 "
+          f"({rows[-1]['active_on']/max(1e-9,rows[0]['active_on'])-1:+.1%})")
+    ok80 = [r for r in rows if r["d7_vs_b"] >= 0.80]
+    if ok80:
+        c80 = min(ok80, key=lambda r: r["mult"])
+        loss = c80["active_on"] / max(1e-9, rows[0]["active_on"]) - 1.0
+        print(f" D7 진도 80% 달성 최소 강도: x{c80['mult']:.1f} "
+              f"(진도 {c80['d7_vs_b']*100:.1f}%, 활성일 {loss:+.1%})")
+        print(" → 결론: 온보딩 강도는 '성장'을 사지 못하고 'D7 진도'만 산다.")
+        print("   정당화 근거는 장기 성장이 아니라 D7 목표 자체여야 한다.")
+    else:
+        print(" → 탐색 구간 내 D7 80% 미달")
+    print(BAR)
+    return rows
+
+
+def plot_onboarding_intensity(
+    rows: List[Dict[str, float]], path: str = "onboarding_intensity.png") -> None:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("\n[matplotlib 미설치 → 위 표 참조]")
+        return
+    xs = [r["mult"] for r in rows]
+    fig, ax1 = plt.subplots(figsize=(8.5, 5.5))
+    ax1.plot(xs, [r["units_off"] for r in rows], "o--", color="#999",
+             label="units (burnout OFF)")
+    ax1.plot(xs, [r["units_on"] for r in rows], "o-", color="#c44e52",
+             label="units (burnout ON)")
+    peak = max(rows, key=lambda r: r["units_on"])
+    ax1.axvline(peak["mult"], color="#c44e52", ls=":", lw=1.2)
+    ax1.set_xlabel("onboarding boost multiplier (intensity)")
+    ax1.set_ylabel("60-day growth units")
+    ax2 = ax1.twinx()
+    ax2.plot(xs, [r["active_on"] for r in rows], "s-", color="#4c72b0",
+             label="active days (ON)")
+    ax2.set_ylabel("active days (burnout ON)", color="#4c72b0")
+    ax2.tick_params(axis="y", labelcolor="#4c72b0")
+    l1, b1 = ax1.get_legend_handles_labels()
+    l2, b2 = ax2.get_legend_handles_labels()
+    ax1.legend(l1 + l2, b1 + b2, loc="center right")
+    ax1.set_title("Onboarding intensity vs burnout breakeven")
+    ax1.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+    print(f"\n온보딩 강도 그래프 저장: {path}")
+
+
+# ============================================================
 # 6. 엔트리포인트
 # ============================================================
 
@@ -1304,6 +1626,14 @@ def main() -> None:
                     help="내생 번아웃 보상강도↔리텐션 손익분기 탐색")
     ap.add_argument("--grid3d", action="store_true",
                     help="B/A·연쇄기여·2층비중 3지표 동시 탐색")
+    ap.add_argument("--calibrate", action="store_true",
+                    help="번아웃 기저 리텐션 역산 피팅 + 민감도별 손익분기")
+    ap.add_argument("--grid4d", action="store_true",
+                    help="밸런스 3제약 + 번아웃 안전 4제약 동시 탐색")
+    ap.add_argument("--onboard-intensity", action="store_true",
+                    help="온보딩 강도 ↔ 번아웃 손익분기 (원래 취지)")
+    ap.add_argument("--fit-sensitivity", type=float, default=1.1,
+                    help="4제약/온보딩 분석에 사용할 번아웃 민감도")
     ap.add_argument("--longterm-days", type=int, default=60)
     ap.add_argument("--burnout-factor", type=float, default=0.6,
                     help="번아웃 시나리오의 리텐션 감쇠 가속 계수(<1)")
@@ -1349,6 +1679,29 @@ def main() -> None:
     if args.grid3d:
         rows3d = grid_search_3d(cfg, days=args.grid_days, trials=args.grid_trials)
         plot_grid_3d(rows3d, "chain_grid_3d.png")
+
+    fitted = None
+    if args.calibrate or args.grid4d or args.onboard_intensity:
+        sens = (0.5, args.fit_sensitivity, 2.0)
+        fitted = calibrate_burnout(cfg, sensitivities=tuple(sorted(set(sens))),
+                                   trials=max(80, args.trials // 2))
+        if args.calibrate:
+            breakeven_across_sensitivity(cfg, fitted, days=args.longterm_days,
+                                         trials=max(80, args.trials // 2))
+
+    if args.grid4d and fitted:
+        curve, _ = fitted[args.fit_sensitivity]
+        grid_search_4d(cfg, curve, args.fit_sensitivity,
+                       days=args.grid_days, trials=args.grid_trials,
+                       burn_days=args.longterm_days,
+                       burn_trials=max(60, args.trials // 3))
+
+    if args.onboard_intensity and fitted:
+        curve, _ = fitted[args.fit_sensitivity]
+        irows = analyze_onboarding_intensity(
+            cfg, curve, args.fit_sensitivity,
+            days=args.longterm_days, trials=max(100, args.trials // 2))
+        plot_onboarding_intensity(irows, "onboarding_intensity.png")
 
     if args.sweep:
         rows = run_sweep(cfg, args.days, args.sweep_trials)
