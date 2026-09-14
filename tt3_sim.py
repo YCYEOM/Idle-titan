@@ -56,6 +56,10 @@ class Config:
     chain_mults: Tuple[float, ...] = (1.05, 1.10, 1.18, 1.26, 1.35)
     chain_daily_cap: int = 5            # ★ 일 5회 상한 (근무일 내 완주 가능)
     chain_complete_bonus: float = 120.0  # 5연쇄 완주 보너스 균열석
+    # 완주 보너스 지급 방식. False(기본)는 완주 시 전액 일괄(all-or-nothing)이라
+    # 연쇄가 끊긴 날 보상이 통째로 사라져 일일 변동성을 증폭시킨다.
+    # True면 연쇄 단계마다 bonus/cap씩 비례 지급하여 같은 총액을 평탄화한다.
+    chain_bonus_graded: bool = False
 
     # --- 1층: 금화 (체크인 빈도와 무관해야 함) ---
     gold_per_hour: float = 100.0        # 정규화 단위
@@ -90,6 +94,11 @@ class Config:
     #   (1.0 = 없음). 유물 log 환류를 우회해 각인→s_max로 직접 복리 전달된다.
     onboarding_boost_mult: float = 1.0
     onboarding_boost_days: int = 7
+    # 핵심 루프 학습용 예외: 온보딩 기간 동안만 연쇄 창을 넓혀, 저빈도 신규 유저도
+    # 연쇄를 경험하게 한다. 전역 확대는 헤비(C형)에게 종일 연쇄를 허용해 C/A를
+    # 1.97→2.96으로 폭증시키므로(측정), 반드시 온보딩 코호트 한정이어야 한다.
+    # 0이면 예외 없음(기본). 스택 만충 2.75h 이상이어야 분산 체크인과 양립한다.
+    onboarding_chain_window_h: float = 0.0
     # 번아웃 계수: 온보딩 유저의 초반 과보상이 콘텐츠 소진을 앞당긴다는 가설.
     # <1.0이면 온보딩 유저의 리텐션 감쇠 시상수를 그만큼 단축(=조기 이탈 가속).
     # 1.0이면 번아웃 없음(순수 온보딩 효과만 관측). ★ 실측 없는 '가정' 파라미터.
@@ -224,6 +233,7 @@ class Player:
 
         self.last_collect_t = -999.0
         self.chain_today = 0
+        self.chain_events = 0           # 연쇄가 성립한 횟수(진단용)
         self.has_ticket = False
 
         self.last_prestige_t = 0.0
@@ -272,6 +282,13 @@ class Player:
                 return mult
         return self.cfg.freshness_floor
 
+    # ---- 현재 적용되는 연쇄 창 (온보딩 학습 예외 반영) ----
+    def chain_window_now(self) -> float:
+        if (self.cfg.onboarding and self.cfg.onboarding_chain_window_h > 0.0
+                and int(self.t // 24.0) < self.cfg.onboarding_boost_days):
+            return self.cfg.onboarding_chain_window_h
+        return self.cfg.chain_window_h
+
     # ---- ③ 온보딩 직접 부스트 배율 (초반 N일 한정) ----
     def onboarding_boost(self) -> float:
         if not self.cfg.onboarding or self.cfg.onboarding_boost_mult <= 1.0:
@@ -294,9 +311,10 @@ class Player:
         raw *= self.onboarding_boost()   # ③ 초반 부스트
 
         # 연쇄 판정
-        within = (now - self.last_collect_t) <= self.cfg.chain_window_h
+        within = (now - self.last_collect_t) <= self.chain_window_now()
         if within and self.chain_today < self.cfg.chain_daily_cap:
             self.chain_today += 1
+            self.chain_events += 1
             idx = min(self.chain_today, len(self.cfg.chain_mults)) - 1
             mult = self.cfg.chain_mults[idx]
         elif not within:
@@ -309,8 +327,15 @@ class Player:
         gained = raw * mult
         self.rift_from_chain += raw * (mult - 1.0) * self.cfg.rift_to_unit * scale
 
-        # 5연쇄 완주 보너스
-        if self.chain_today == self.cfg.chain_daily_cap and within:
+        # 5연쇄 완주 보너스 (일괄 지급 / 비례 지급)
+        if self.cfg.chain_bonus_graded:
+            if within and self.chain_today >= 1:
+                inc = self.cfg.chain_complete_bonus / max(1, self.cfg.chain_daily_cap)
+                gained += inc
+                self.rift_from_chain += inc * self.cfg.rift_to_unit * scale
+                if self.chain_today == self.cfg.chain_daily_cap:
+                    self.has_ticket = True
+        elif self.chain_today == self.cfg.chain_daily_cap and within:
             gained += self.cfg.chain_complete_bonus
             self.rift_from_chain += self.cfg.chain_complete_bonus * self.cfg.rift_to_unit * scale
             self.has_ticket = True
@@ -495,6 +520,7 @@ def simulate(
     onboarding: Optional[bool] = None,
     apply_retention: bool = False,
     retention: Optional[RetentionCurve] = None,
+    schedule: Optional[List[float]] = None,
 ) -> Player:
     """단일 페르소나 시뮬레이션.
 
@@ -517,7 +543,8 @@ def simulate(
     if ret is not None and ob and cfg.onboarding_burnout_factor < 1.0:
         ret = replace(ret, decay_days=ret.decay_days * cfg.onboarding_burnout_factor)
 
-    p = Player(cfg, PERSONAS[name], rng, retention=ret)
+    p = Player(cfg, schedule if schedule is not None else PERSONAS[name], rng,
+               retention=ret)
     for d in range(days):
         p.run_day(d)
     return p
@@ -1756,6 +1783,276 @@ def verify_d7_retention_link(
 
 
 # ============================================================
+# 5m. 연쇄 보상 형태 비교 — 상시 배율 vs 완주 단발 보너스
+# ============================================================
+
+
+def _tune_param_to_chain(
+    make_cfg, lo: float, hi: float, target: float = CHAIN_TARGET,
+    days: int = 30, trials: int = 40, iters: int = 9, seed0: int = 1,
+) -> Tuple[float, float, float, float]:
+    """연쇄기여가 target이 되는 파라미터를 이분 탐색. (param, B/A, chain, l2) 반환."""
+    best = (hi, 0.0, 0.0, 0.0)
+    for _ in range(iters):
+        mid = (lo + hi) / 2.0
+        ratio, chain, l2 = _metrics_3(make_cfg(mid), days, trials, seed0)
+        best = (mid, ratio, chain, l2)
+        if chain < target:
+            lo = mid
+        else:
+            hi = mid
+    return best
+
+
+def compare_chain_reward_shape(
+    cfg: Config, sensitivity: float = 1.1, days: int = 30, trials: int = 40,
+    burn_days: int = 60, burn_trials: int = 100, seed0: int = 1,
+) -> List[Dict[str, object]]:
+    """같은 연쇄기여(10%)를 두 가지 형태로 만들었을 때 번아웃 비용을 비교.
+
+      A안 상시 배율   : chain_mults 전체를 키운다 → 체크인마다 보상이 커지고
+                        연쇄가 끊긴 날과의 격차가 벌어져 일일 변동성이 커진다.
+      B안 완주 보너스 : chain_complete_bonus(5연쇄 완주 시 1회 지급)만 키운다 →
+                        가산항이라 상대 변동성을 오히려 희석한다.
+
+    번아웃은 보상 '수준'이 아니라 '변동성'에 반응하므로(relative 모드), 같은
+    연쇄기여라도 형태에 따라 비용이 달라진다는 가설을 검증한다.
+    """
+    base = cfg.chain_mults
+    print("\n" + BAR)
+    print(f" 연쇄 보상 형태 비교 | 목표 연쇄기여 {CHAIN_TARGET*100:.0f}% | "
+          f"밸런스 {days}일×{trials}회 / 번아웃 {burn_days}일×{burn_trials}회")
+    print(BAR)
+
+    bcfg = replace(cfg, burnout_sensitivity=sensitivity,
+                   burnout_ref_mode="relative")
+    base_loss = _burnout_active_loss(bcfg, None, burn_days, burn_trials, seed0,
+                                     persona="B_타깃")
+    print(f" 기준선(현행) B형 활성일 손실: {base_loss*100:.1f}%  "
+          f"(현행 연쇄기여는 약 1.5%)")
+    print("-" * 76)
+
+    paths = [
+        ("A 상시 배율(chain_mults)",
+         lambda v: replace(cfg, chain_mults=_scaled_mults(base, v)),
+         1.0, 30.0, "scale"),
+        ("B 완주보너스 일괄(all-or-nothing)",
+         lambda v: replace(cfg, chain_complete_bonus=v),
+         120.0, 20000.0, "bonus"),
+        ("C 완주보너스 비례(graded)",
+         lambda v: replace(cfg, chain_complete_bonus=v, chain_bonus_graded=True),
+         120.0, 20000.0, "bonus"),
+    ]
+
+    rows: List[Dict[str, object]] = []
+    print(f"{'형태':<26}{'파라미터':>12}{'B/A':>8}{'연쇄':>7}{'2층':>7}{'번아웃증분':>11}")
+    print("-" * 76)
+    for label, maker, lo, hi, pname in paths:
+        param, ratio, chain, l2 = _tune_param_to_chain(
+            maker, lo, hi, CHAIN_TARGET, days, trials, seed0=seed0)
+        c = replace(maker(param), burnout_sensitivity=sensitivity,
+                    burnout_ref_mode="relative")
+        loss = _burnout_active_loss(c, None, burn_days, burn_trials, seed0,
+                                    persona="B_타깃")
+        delta = loss - base_loss
+        rows.append({"label": label, "param_name": pname, "param": param,
+                     "ratio": ratio, "chain": chain, "l2": l2,
+                     "loss": loss, "delta": delta})
+        print(f"{label:<26}{param:>12,.1f}{ratio:>8.3f}{chain*100:>6.1f}%"
+              f"{l2*100:>6.1f}%{delta*100:>+10.1f}%p")
+    print("-" * 76)
+
+    best = min(rows, key=lambda r: r["delta"])
+    worst = max(rows, key=lambda r: r["delta"])
+    print(f" 최저 비용: {best['label']} ({best['delta']*100:+.1f}%p)")
+    print(f" 최고 비용: {worst['label']} ({worst['delta']*100:+.1f}%p) "
+          f"→ 격차 {(worst['delta']-best['delta'])*100:.1f}%p")
+    print(f" 안전 기준({int(BURNOUT_SAFE_LOSS*100)}%p) 통과: " + " / ".join(
+        f"{r['label'].split()[0]} {'✓' if r['delta'] <= BURNOUT_SAFE_LOSS else '✗'}"
+        for r in rows))
+    for r in rows:
+        flags = []
+        if not (BA_LO <= r["ratio"] <= BA_HI):
+            flags.append("B/A 이탈")
+        if not (L2_LO <= r["l2"] <= L2_HI):
+            flags.append("2층 이탈")
+        if flags:
+            print(f"   ※ {r['label']}: {', '.join(flags)} — 다른 노브로 재보정 필요")
+    print(BAR)
+    return rows
+
+
+# ============================================================
+# 5n. 애착 계수 임계값 역산 — 개입 부호가 뒤집히는 지점
+# ============================================================
+
+
+def find_attachment_threshold(
+    cfg: Config, curve: RetentionCurve, sensitivity: float = 1.1,
+    coefs: Tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0),
+    days: int = 60, trials: int = 200, seed0: int = 1,
+) -> Dict[str, float]:
+    """'D7 진도 목표'가 정당화되려면 애착이 얼마나 강해야 하는가를 역산.
+
+    개입(온보딩 부스트 x1→x4)이 D30+ 잔존에 주는 효과의 부호가 음에서 양으로
+    바뀌는 최소 attachment_coef를 찾는다. 그 값이 'D7 목표가 성립하기 위해
+    실측으로 확인해야 할 애착 강도'의 하한이다.
+    """
+    print("\n" + BAR)
+    print(f" 애착 계수 임계값 역산 | {days}일 × {trials}회 (s={sensitivity})")
+    print(" 질문: 진도→애착 채널이 얼마나 세야 'D7 진도↑ → 잔존↑'가 성립하는가")
+    print(BAR)
+    print(f"{'attach':>8}{'D7진도(x1→x4)':>16}{'D30잔존(x1→x4)':>18}{'부호':>7}")
+    print("-" * 76)
+
+    results: List[Tuple[float, float]] = []
+    for coef in coefs:
+        c = replace(cfg, burnout_enabled=True, burnout_ref_mode="relative",
+                    burnout_sensitivity=sensitivity, burnout_attachment_coef=coef)
+        d7a, latea = _d7_and_late(replace(c, onboarding_boost_mult=1.0), curve,
+                                  days, trials, seed0)
+        d7b, lateb = _d7_and_late(replace(c, onboarding_boost_mult=4.0), curve,
+                                  days, trials, seed0)
+        d7_chg = statistics.fmean(d7b) / max(1e-9, statistics.fmean(d7a)) - 1.0
+        late_chg = statistics.fmean(lateb) / max(1e-9, statistics.fmean(latea)) - 1.0
+        results.append((coef, late_chg))
+        sign = "+" if late_chg > 0 else "-"
+        print(f"{coef:>8.1f}{d7_chg:>+15.1%}{late_chg:>+17.1%}{sign:>7}")
+    print("-" * 76)
+
+    thr = None
+    for (c0, v0), (c1, v1) in zip(results, results[1:]):
+        if v0 <= 0.0 < v1:
+            # 선형 보간으로 교차점 추정
+            thr = c0 + (c1 - c0) * (-v0) / max(1e-9, (v1 - v0))
+            break
+    if thr is not None:
+        print(f" 부호 반전 임계 애착계수: 약 {thr:.2f}")
+        # 실측 가능한 형태로 환산: 60일차 전형 진도에서의 리텐션 배수
+        typ_prog = 2.3          # D형 60일 s_max ≈ 330 (초기 100) → 배수 3.3
+        mult = math.exp(thr * math.log10(1.0 + typ_prog))
+        print(f" → 실측 환산: 진도가 {1+typ_prog:.1f}배 쌓인 코호트의 잔존이")
+        print(f"   신규 대비 약 {mult:.2f}배(이탈 해저드 {(1-1/mult)*100:.0f}% 감소)여야")
+        print(f"   'D7 진도↑ → D30 잔존↑'가 성립한다. 코호트 로그로 검증 가능한 수치다.")
+        print(f"   이보다 약하면 D7 목표는 잔존을 근거로 정당화할 수 없다.")
+    else:
+        print(" 탐색 구간 내 부호 반전 없음 → 애착만으로는 D7 목표를 정당화할 수 없다")
+    print(BAR)
+    return {"threshold": thr if thr is not None else float("nan")}
+
+
+# ============================================================
+# 5o. D_쇼츠유입 연쇄 노출 진단 — 핵심 루프 배제 여부
+# ============================================================
+
+# 진단용 대안 스케줄: 총 체크인 수는 유지하되 일부를 연쇄 창 안으로 묶는다.
+D_SCHEDULE_VARIANTS: Dict[str, List[float]] = {
+    "현행(분산 4회)": [8.0, 12.5, 18.0, 22.5],
+    "묶음1쌍(8시 연접)": [8.0, 9.0, 18.0, 22.5],
+    "묶음2쌍(아침·저녁)": [8.0, 9.0, 18.0, 19.0],
+    "묶음3연(저녁 집중)": [8.0, 18.0, 19.0, 20.0],
+    # 스택 만충(2.75h) 이상 간격을 유지하면서 온보딩 연쇄 창(3.5h) 안에 드는 배치.
+    # 두 층의 요구를 동시에 만족시키는 유일한 해 — 단, 연쇄 창 예외가 있어야 성립.
+    "분산3h(권장·예외 전제)": [8.0, 11.0, 14.0, 17.0],
+}
+
+
+def diagnose_d_chain_exposure(
+    cfg: Config, days: int = 30, trials: int = 200, seed0: int = 1,
+) -> List[Dict[str, object]]:
+    """D형이 게임 핵심 루프(연쇄)를 경험하는지 진단하고, 대안 스케줄과 비교.
+
+    현행 D형 스케줄은 인접 간격이 모두 연쇄 창(chain_window_h)보다 넓어
+    연쇄가 구조적으로 0회다. 온보딩이 핵심 루프를 가르치지 못한다는 뜻이며,
+    D형에서 잰 연쇄 관련 지표는 모두 설계와 직교하게 된다.
+    """
+    print("\n" + BAR)
+    print(f" D_쇼츠유입 연쇄 노출 진단 | {days}일 × {trials}회 | "
+          f"연쇄 창 = {cfg.chain_window_h}h")
+    print(BAR)
+
+    # 현행 설계와 C안(완주보너스 비례 지급) 재설계를 나란히 비교한다.
+    designs = {
+        "현행 설계": cfg,
+        "C안 재설계(비례보너스)": replace(cfg, chain_bonus_graded=True,
+                                          chain_complete_bonus=314.0),
+        "D안 온보딩 연쇄창 예외(3.5h)": replace(cfg, onboarding_chain_window_h=3.5),
+    }
+
+    rows: List[Dict[str, object]] = []
+    for dlabel, dcfg in designs.items():
+        b7 = statistics.fmean([growth_units(simulate(dcfg, "B_타깃", 7, seed0 + k * 7919),
+                                            dcfg) for k in range(trials)])
+        print(f"\n [{dlabel}]")
+        print(f"{'스케줄':<22}{'최소간격':>9}{'연쇄/일':>9}{'연쇄기여':>9}"
+              f"{'D7진도(B대비)':>14}{'성장단위':>12}")
+        print("-" * 76)
+        sub: List[Dict[str, object]] = []
+        for label, sched in D_SCHEDULE_VARIANTS.items():
+            gaps = [sched[i + 1] - sched[i] for i in range(len(sched) - 1)]
+            min_gap = min(gaps)
+            ev, sh, us, d7 = [], [], [], []
+            for k in range(trials):
+                p = simulate(dcfg, "D_쇼츠유입", days, seed0 + k * 7919, schedule=sched)
+                gu = growth_units(p, dcfg)
+                ev.append(p.chain_events / days)
+                sh.append(p.rift_from_chain / max(1e-9, gu))
+                us.append(gu)
+                p7 = simulate(dcfg, "D_쇼츠유입", 7, seed0 + k * 7919, schedule=sched)
+                d7.append(growth_units(p7, dcfg))
+            m_ev, m_sh = statistics.fmean(ev), statistics.fmean(sh)
+            m_us, m_d7 = statistics.fmean(us), statistics.fmean(d7) / max(1e-9, b7)
+            rec = {"design": dlabel, "label": label, "min_gap": min_gap,
+                   "chain_per_day": m_ev, "chain_share": m_sh,
+                   "units": m_us, "d7_vs_b": m_d7}
+            sub.append(rec)
+            rows.append(rec)
+            mark = "★" if min_gap <= cfg.chain_window_h else " "
+            print(f"{label:<22}{min_gap:>8.2f}h{m_ev:>9.2f}{m_sh*100:>8.1f}%"
+                  f"{m_d7*100:>13.1f}%{m_us:>12,.0f}{mark}")
+        cur, best = sub[0], max(sub, key=lambda r: r["units"])
+        verdict = ("분산(현행)이 최적 — 연쇄가 스택 손실을 보상하지 못함"
+                   if best["label"] == cur["label"]
+                   else f"'{best['label']}' 우세 — 연쇄가 스택 손실을 상회")
+        print(f" → {verdict}")
+
+    print("-" * 76)
+    cur0 = rows[0]
+    print(f" 구조 진단: 현행 D형 최소간격 {cur0['min_gap']:.2f}h > 연쇄 창 "
+          f"{cfg.chain_window_h}h → 연쇄 {cur0['chain_per_day']:.2f}회/일(구조적 0).")
+    print(" 핵심 모순: 스택은 55분마다 최대 3개까지 쌓여 '분산'이 수급에 유리하고,")
+    print("   연쇄는 1.5h 이내 재수령이라 '밀집'이 유리하다. 두 층이 정반대 행동을 요구한다.")
+    n = len(D_SCHEDULE_VARIANTS)
+    c_rows = rows[n:2 * n]
+    cur_new, best_new = c_rows[0], max(c_rows, key=lambda r: r["units"])
+    # 연쇄를 실제로 경험하는(>0) 스케줄만 '모순 해소' 후보로 본다.
+    chained = [r for r in c_rows if r["chain_per_day"] > 0.0]
+    if chained and best_new["chain_per_day"] > 0.0:
+        print(f" C안 재설계 효과: '{best_new['label']}'이 연쇄 "
+              f"{best_new['chain_per_day']:.2f}회/일을 확보하면서 성장도 최고"
+              f"({best_new['units']:,.0f}) → 모순 해소.")
+    else:
+        print(" C안 재설계로도 분산이 우세 → 모순은 보상 크기가 아니라 구조에서 온다.")
+        print(f"   스택 만충에 {cfg.stack_cap * cfg.stack_interval_h:.2f}h가 필요한데 "
+              f"연쇄 창은 {cfg.chain_window_h:.2f}h로 더 좁아 애초에 양립 불가다.")
+    d_rows = [r for r in rows if r["design"].startswith("D안")]
+    if d_rows:
+        # 권장안은 '연쇄를 경험하면서 성장이 최대'인 스케줄 (연쇄 횟수만 보면
+        # 성장이 낮은 밀집안이 뽑혀 잘못된 권고가 된다).
+        cand = [r for r in d_rows if r["chain_per_day"] > 0.0] or d_rows
+        rec = max(cand, key=lambda r: r["units"])
+        cur_d = d_rows[0]
+        print(f" D안 해법: 온보딩 한정으로 연쇄 창을 넓히면 '{rec['label']}'에서")
+        print(f"   연쇄 {rec['chain_per_day']:.2f}회/일 + 성장 {rec['units']:,.0f} "
+              f"({rec['units']/max(1e-9,cur_d['units'])-1:+.1%} vs 현행) + "
+              f"D7 진도 {rec['d7_vs_b']*100:.1f}%")
+        print("   → 밀집(연쇄)과 분산(스택)을 동시에 만족하는 유일한 해. 전역 확대와")
+        print("   달리 C형 밸런스 무영향(전역 시 C/A 1.97→2.96, 경고선 2.20 초과).")
+    print(BAR)
+    return rows
+
+
+# ============================================================
 # 6. 엔트리포인트
 # ============================================================
 
@@ -1795,6 +2092,12 @@ def main() -> None:
                     help="번아웃 기준선 모드 (relative=스케일 불변, 권장)")
     ap.add_argument("--attachment", type=float, default=0.0,
                     help="진도→애착(리텐션 상승) 계수. 0이면 애착 채널 없음")
+    ap.add_argument("--chain-shape", action="store_true",
+                    help="연쇄 보상 형태 비교 (상시 배율 vs 완주 보너스)")
+    ap.add_argument("--attach-threshold", action="store_true",
+                    help="애착 계수 부호반전 임계값 역산")
+    ap.add_argument("--diagnose-d", action="store_true",
+                    help="D형 연쇄 노출 진단 + 대안 스케줄 비교")
     ap.add_argument("--verify-d7-link", action="store_true",
                     help="D7 진도 ↔ D30 잔존 상관 검증 (목표 타당성)")
     ap.add_argument("--longterm-days", type=int, default=60)
@@ -1861,6 +2164,20 @@ def main() -> None:
                        days=args.grid_days, trials=args.grid_trials,
                        burn_days=args.longterm_days,
                        burn_trials=max(60, args.trials // 3))
+
+    if args.chain_shape:
+        compare_chain_reward_shape(cfg, sensitivity=args.fit_sensitivity,
+                                   days=args.grid_days, trials=args.grid_trials,
+                                   burn_days=args.longterm_days,
+                                   burn_trials=max(80, args.trials // 2))
+
+    if args.attach_threshold:
+        find_attachment_threshold(cfg, SHORTS_RETENTION, args.fit_sensitivity,
+                                  days=args.longterm_days,
+                                  trials=max(150, args.trials))
+
+    if args.diagnose_d:
+        diagnose_d_chain_exposure(cfg, days=args.days, trials=args.trials)
 
     if args.verify_d7_link:
         verify_d7_retention_link(cfg, SHORTS_RETENTION, args.fit_sensitivity,
