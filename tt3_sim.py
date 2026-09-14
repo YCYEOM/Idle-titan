@@ -100,7 +100,20 @@ class Config:
     # 포만도가 높을수록 다음 날 접속 확률이 지수적으로 감소한다(콘텐츠 소진).
     # 포만도는 매일 일부 회복(휴식)되어 동적 평형을 이룬다. ★ 실측 없는 행동 가정.
     burnout_enabled: bool = False
-    burnout_ref_daily: float = 1940.0   # 만족 기준 일일 균열석 성장단위(D형 baseline)
+    # 기준선 모드: "absolute"는 고정 기준(구버전) — 총 보상이 낮은 빌드가 제약을
+    # 자동 통과하는 편향이 있다. "relative"는 유저 자신의 최근 보상 EMA를 기준으로
+    # 삼아 스케일 불변(보상 전체를 c배 해도 포만도 불변) → 그 편향이 제거된다.
+    burnout_ref_mode: str = "absolute"
+    burnout_ref_alpha: float = 0.25     # relative 모드 기대치 EMA 갱신 속도
+    # 기대 하회(보상 절벽) 시 실망 가중치. 온보딩 부스트 종료 절벽을 포착한다.
+    burnout_shortfall_weight: float = 1.0
+    # 허용 구간(deadband): 기대 대비 ±tolerance 이내의 등락은 '정상 변동'으로 보고
+    # 포만도에 반영하지 않는다. 없으면 축복·지터 같은 무작위성까지 번아웃으로
+    # 잘못 계상되어, 설계와 무관한 상수 이탈이 발생한다.
+    burnout_tolerance: float = 0.25
+    # 진도 축적 → 애착(투자 효과) → 이탈 해저드 감소. 0이면 애착 채널 없음.
+    burnout_attachment_coef: float = 0.0
+    burnout_ref_daily: float = 1940.0   # absolute 모드 전용 고정 기준선
     burnout_sensitivity: float = 1.1    # 누적 포만도 → 이탈 해저드 계수
     burnout_recovery: float = 0.75      # 매일 포만도 잔존율(<1이면 자연 회복)
 
@@ -193,6 +206,7 @@ class Player:
         self.retention = retention      # None이면 상시 접속(게이트 없음)
         self.active_days = 0            # 실제 접속한 일수(리텐션 통과)
         self.satiation = 0.0           # 내생 번아웃 포만도 누적
+        self.ref_daily: Optional[float] = None   # relative 모드 기대 보상(EMA)
 
         self.t = 0.0                    # 시뮬레이션 절대 시각(시)
         self.smax_base = cfg.smax_initial
@@ -375,7 +389,12 @@ class Player:
     def active_prob(self, day: int) -> float:
         base = self.retention.prob(day) if self.retention is not None else 1.0
         if self.cfg.burnout_enabled:
-            base *= math.exp(-self.cfg.burnout_sensitivity * self.satiation)
+            hazard = self.cfg.burnout_sensitivity * self.satiation
+            if self.cfg.burnout_attachment_coef > 0.0:
+                # 진도가 쌓일수록 투자 심리(애착)로 이탈 해저드가 낮아진다.
+                prog = max(0.0, self.smax / max(1e-9, self.cfg.smax_initial) - 1.0)
+                hazard -= self.cfg.burnout_attachment_coef * math.log10(1.0 + prog)
+            base = min(1.0, base * math.exp(-hazard))
         return base
 
     # ---- 하루 실행 ----
@@ -441,8 +460,21 @@ class Player:
         # ★ 번아웃 포만도 갱신: 오늘 보상이 기준선 초과분만큼 누적(+자연 회복)
         if self.cfg.burnout_enabled:
             day_rift = self.rift_units - snap_rift
-            excess = max(0.0, day_rift / max(1e-9, self.cfg.burnout_ref_daily) - 1.0)
-            self.satiation = self.satiation * self.cfg.burnout_recovery + excess
+            if self.cfg.burnout_ref_mode == "relative":
+                # 기대치는 유저 자신의 최근 보상(EMA). 첫 활성일을 기대 기준으로 잡아
+                # 보상 전체를 c배 해도 비율 r이 불변 → 스케일 불변(편향 제거).
+                if self.ref_daily is None:
+                    self.ref_daily = max(1e-9, day_rift)
+                ref = self.ref_daily
+                r = day_rift / max(1e-9, ref)
+                tol = self.cfg.burnout_tolerance
+                dev = (max(0.0, r - 1.0 - tol)
+                       + self.cfg.burnout_shortfall_weight * max(0.0, 1.0 - r - tol))
+                a = self.cfg.burnout_ref_alpha
+                self.ref_daily = (1.0 - a) * ref + a * day_rift
+            else:
+                dev = max(0.0, day_rift / max(1e-9, self.cfg.burnout_ref_daily) - 1.0)
+            self.satiation = self.satiation * self.cfg.burnout_recovery + dev
         self.chain_today = 0            # 일일 연쇄 초기화
 
 
@@ -1409,20 +1441,29 @@ def breakeven_across_sensitivity(
 # 5j. 4제약 동시 탐색 (B/A · 연쇄 · 2층 + 번아웃 안전)
 # ============================================================
 
-BURNOUT_SAFE_LOSS = 0.10          # 활성일 손실 허용 상한 (10%)
+# 현행 설계(기준선) 대비 '증분' 활성일 손실 상한. 절대값으로 걸면 기준선 자체의
+# 손실(무작위성·스케줄 구조에서 오는 상수분)까지 포함되어 설계 비교가 왜곡된다.
+BURNOUT_SAFE_LOSS = 0.10          # 증분 손실 허용 상한 (10%p)
 
 
 def _burnout_active_loss(
-    cfg: Config, curve: RetentionCurve, days: int, trials: int, seed0: int = 1,
+    cfg: Config, curve: Optional[RetentionCurve], days: int, trials: int,
+    seed0: int = 1, persona: str = "B_타깃",
 ) -> float:
-    """번아웃 ON/OFF 활성일수 손실률 (1 - on/off)."""
+    """번아웃 ON/OFF 활성일수 손실률 (1 - on/off).
+
+    ★ 측정 페르소나는 기본적으로 설계 타깃인 B형이다. D_쇼츠유입은 스케줄 간격이
+      모두 연쇄 창(1.5h)보다 넓어 연쇄가 전혀 발생하지 않으므로(연쇄기여 0.0%),
+      D형에서 재면 chain_mults 설계와 직교한 값만 나온다.
+      curve=None이면 리텐션 게이트 없이 '설계가 유발한 번아웃'만 분리 측정한다.
+    """
     on, off = [], []
+    c_on = replace(cfg, burnout_enabled=True)
+    c_off = replace(cfg, burnout_enabled=False)
     for k in range(trials):
-        c_on = replace(cfg, burnout_enabled=True)
-        c_off = replace(cfg, burnout_enabled=False)
-        on.append(simulate(c_on, "D_쇼츠유입", days, seed0 + k * 7919,
+        on.append(simulate(c_on, persona, days, seed0 + k * 7919,
                            retention=curve).active_days)
-        off.append(simulate(c_off, "D_쇼츠유입", days, seed0 + k * 7919,
+        off.append(simulate(c_off, persona, days, seed0 + k * 7919,
                             retention=curve).active_days)
     a_on, a_off = statistics.fmean(on), statistics.fmean(off)
     return 1.0 - a_on / max(1e-9, a_off)
@@ -1443,7 +1484,7 @@ def grid_search_4d(
     print("\n" + BAR)
     print(f" 4제약 동시 탐색 | 밸런스 {days}일×{trials}회 + 번아웃 {burn_days}일×{burn_trials}회")
     print(f" 제약: B/A∈[{BA_LO},{BA_HI}]  연쇄∈[{int(CHAIN_LO*100)},{int(CHAIN_HI*100)}%]  "
-          f"2층∈[{int(L2_LO*100)},{int(L2_HI*100)}%]  활성일손실≤{int(BURNOUT_SAFE_LOSS*100)}% (s={sensitivity})")
+          f"2층∈[{int(L2_LO*100)},{int(L2_HI*100)}%]  B형활성일손실≤{int(BURNOUT_SAFE_LOSS*100)}% (s={sensitivity})")
     print(BAR)
 
     stage1: List[Dict[str, object]] = []
@@ -1459,23 +1500,31 @@ def grid_search_4d(
                                "cfg": cfg2, "ratio": ratio, "chain": chain,
                                "l2": l2, "balance_ok": ok})
     passed = [r for r in stage1 if r["balance_ok"]]
+    base_cfg = replace(cfg, burnout_sensitivity=sensitivity,
+                       onboarding_burnout_factor=1.0)
+    base_loss = _burnout_active_loss(base_cfg, None, burn_days, burn_trials,
+                                     seed0, persona="B_타깃")
     print(f" 1단계: 밸런스 3제약 통과 {len(passed)}/{len(stage1)}개 → 2단계 번아웃 측정")
+    print(f" 기준선(현행 설계) B형 활성일 손실: {base_loss*100:.1f}% → 증분으로 평가")
     print("-" * 76)
     print(f"{'scale':>6}{'r2u':>6}{'gold':>6}{'B/A':>8}{'연쇄':>7}{'2층':>7}"
-          f"{'활성일손실':>11}   판정")
+          f"{'번아웃증분':>11}   판정")
     print("-" * 76)
 
     rows: List[Dict[str, object]] = []
     for r in passed:
         c = replace(r["cfg"], burnout_sensitivity=sensitivity,
                     onboarding_burnout_factor=1.0)
-        loss = _burnout_active_loss(c, curve, burn_days, burn_trials, seed0)
-        safe = loss <= BURNOUT_SAFE_LOSS
-        r.update({"active_loss": loss, "safe": safe, "valid": safe})
+        loss = _burnout_active_loss(c, None, burn_days, burn_trials, seed0,
+                                    persona="B_타깃")
+        delta = loss - base_loss
+        safe = delta <= BURNOUT_SAFE_LOSS
+        r.update({"active_loss": loss, "delta_loss": delta, "safe": safe,
+                  "valid": safe})
         rows.append(r)
         print(f"{r['scale']:>6.0f}{r['rift_to_unit']:>6.1f}{r['gold']:>6.0f}"
               f"{r['ratio']:>8.3f}{r['chain']*100:>6.1f}%{r['l2']*100:>6.1f}%"
-              f"{loss*100:>10.1f}%   {'✓ 4제약 만족' if safe else '✗ 번아웃 초과'}")
+              f"{delta*100:>+9.1f}%p   {'✓ 4제약 만족' if safe else '✗ 번아웃 초과'}")
     print("-" * 76)
     valid = [r for r in rows if r["valid"]]
     print(f" 4제약 동시 만족: {len(valid)}/{len(passed)}개 (전체 {len(stage1)}개 중)")
@@ -1483,9 +1532,13 @@ def grid_search_4d(
         best = min(valid, key=lambda r: abs(r["chain"] - CHAIN_TARGET))
         print(f" 권장안: scale={best['scale']:.0f} r2u={best['rift_to_unit']:.1f} "
               f"gold={best['gold']:.0f} → B/A {best['ratio']:.3f}, 연쇄 {best['chain']*100:.1f}%, "
-              f"2층 {best['l2']*100:.1f}%, 활성일손실 {best['active_loss']*100:.1f}%")
+              f"2층 {best['l2']*100:.1f}%, 번아웃증분 {best['delta_loss']*100:+.1f}%p")
     else:
-        print(" → 4제약 동시 만족 불가: 연쇄 목표와 번아웃 안전이 구조적으로 상충")
+        cheapest = min(rows, key=lambda r: r["delta_loss"])
+        print(" → 4제약 동시 만족 불가. 연쇄 8~12%를 만들려면 chain_scale을 크게 올려야 하고,")
+        print(f"   그 자체가 B형 번아웃을 키운다(최소 증분 {cheapest['delta_loss']*100:+.1f}%p "
+              f"@ scale={cheapest['scale']:.0f}).")
+        print("   → 연쇄 보상을 '상시 배율'이 아닌 '완주 단발 보너스'로 옮기는 재설계가 필요.")
     print(BAR)
     return rows
 
@@ -1599,6 +1652,110 @@ def plot_onboarding_intensity(
 
 
 # ============================================================
+# 5l. D7 진도 ↔ D30 잔존 링크 검증 (목표 타당성)
+# ============================================================
+
+
+def _pearson(xs: List[float], ys: List[float]) -> float:
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    mx, my = statistics.fmean(xs), statistics.fmean(ys)
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx <= 0 or syy <= 0:
+        return 0.0
+    return sxy / math.sqrt(sxx * syy)
+
+
+def _d7_and_late(
+    cfg: Config, curve: RetentionCurve, days: int, trials: int, seed0: int = 1,
+) -> Tuple[List[float], List[float]]:
+    """시행별 (D7 누적 성장단위, D30+ 잔존율)을 수집."""
+    d7, late = [], []
+    for k in range(trials):
+        p = simulate(cfg, "D_쇼츠유입", days, seed0 + k * 7919, retention=curve)
+        log = p.daily_log
+        d7.append(sum(d["gold"] + d["rift"] for d in log[:7]))
+        tail = log[29:days]
+        late.append(statistics.fmean([d.get("active", 1) for d in tail]) if tail else 0.0)
+    return d7, late
+
+
+def verify_d7_retention_link(
+    cfg: Config, curve: RetentionCurve, sensitivity: float,
+    days: int = 60, trials: int = 400, attachment: float = 0.5, seed0: int = 1,
+) -> Dict[str, Dict[str, float]]:
+    """'D7 진도 80%' 목표가 D30 잔존과 실제로 연결되는지 검증한다.
+
+    두 가지를 분리해서 본다.
+      (1) 관측 상관 : 시행별 D7 진도와 D30+ 잔존의 피어슨 상관.
+                      로그에서 계산하면 나오는 값이지만, 같은 리텐션 추첨이
+                      진도와 잔존 양쪽을 동시에 흔들기 때문에 교란(confounding)된다.
+      (2) 개입 효과 : 온보딩 부스트를 실제로 바꿔(do-operator) D7 진도를 올렸을 때
+                      D30+ 잔존이 어떻게 움직이는가. 설계 판단의 근거는 이쪽이다.
+
+    두 값의 부호가 다르면 'D7 진도를 올리면 잔존이 오른다'는 해석은 성립하지 않는다.
+    """
+    variants = {
+        "A 번아웃 없음": replace(cfg, burnout_enabled=False),
+        "B 번아웃(relative)": replace(cfg, burnout_enabled=True,
+                                      burnout_ref_mode="relative",
+                                      burnout_sensitivity=sensitivity),
+        f"C 번아웃+애착{attachment}": replace(cfg, burnout_enabled=True,
+                                              burnout_ref_mode="relative",
+                                              burnout_sensitivity=sensitivity,
+                                              burnout_attachment_coef=attachment),
+    }
+    probes = (1.0, 2.0, 4.0)
+
+    print("\n" + BAR)
+    print(f" D7 진도 ↔ D30 잔존 링크 검증 | {days}일 × {trials}회")
+    print(BAR)
+    print(" (1) 관측 상관 vs (2) 개입 효과 — 부호가 다르면 목표 해석이 무너진다")
+    print("-" * 76)
+    print(f"{'모델':<20}{'관측 r':>9}{'D7진도(x1→x4)':>16}{'D30잔존(x1→x4)':>18}{'개입부호':>9}")
+    print("-" * 76)
+
+    out: Dict[str, Dict[str, float]] = {}
+    for label, c in variants.items():
+        xs, ys = _d7_and_late(c, curve, days, trials, seed0)
+        r_obs = _pearson(xs, ys)
+        d7_probe, late_probe = [], []
+        for m in probes:
+            cm = replace(c, onboarding_boost_mult=m)
+            a, b = _d7_and_late(cm, curve, days, max(trials // 2, 80), seed0)
+            d7_probe.append(statistics.fmean(a))
+            late_probe.append(statistics.fmean(b))
+        d7_chg = d7_probe[-1] / max(1e-9, d7_probe[0]) - 1.0
+        late_chg = late_probe[-1] / max(1e-9, late_probe[0]) - 1.0
+        sign = "+" if late_chg > 0.01 else ("-" if late_chg < -0.01 else "0")
+        out[label] = {"r_obs": r_obs, "d7_change": d7_chg, "late_change": late_chg}
+        print(f"{label:<20}{r_obs:>+9.3f}{d7_chg:>+15.1%}{late_chg:>+17.1%}{sign:>9}")
+    print("-" * 76)
+
+    a = out["A 번아웃 없음"]
+    b = out["B 번아웃(relative)"]
+    c = out[f"C 번아웃+애착{attachment}"]
+    rmax = max(abs(v["r_obs"]) for v in out.values())
+    print(" 진단:")
+    print(f"  · 관측 상관은 세 모델 모두 |r|<{rmax+0.01:.2f} 로 사실상 0 → 로그에서 상관을")
+    print("    재도 D7 진도가 잔존을 예측한다는 근거가 나오지 않는다.")
+    print(f"  · 더 중요한 건 부호 불일치다. C 모델은 관측 r={c['r_obs']:+.3f}(양)인데")
+    print(f"    개입 효과는 {c['late_change']:+.1%}(음)로 정반대다. 상관으로 목표를")
+    print("    정당화했다면 정확히 반대 결론에 도달했을 것이다.")
+    print(f"  · 개입 효과: 번아웃 없음 {a['late_change']:+.1%}(무영향) → "
+          f"번아웃 {b['late_change']:+.1%} → 애착 포함 {c['late_change']:+.1%}")
+    print("    애착 채널이 손상을 절반으로 줄이지만 부호를 뒤집지는 못한다.")
+    print("  · 결론: 'D7 진도 80%'는 잔존을 사지 못한다. 이 목표를 유지하려면")
+    print("    근거를 잔존이 아닌 별도 지표(초기 이탈 방지·스토어 전환 등)로 세우거나,")
+    print("    진도가 잔존으로 이어지는 채널(애착)을 실측으로 확인해야 한다.")
+    print(BAR)
+    return out
+
+
+# ============================================================
 # 6. 엔트리포인트
 # ============================================================
 
@@ -1634,6 +1791,12 @@ def main() -> None:
                     help="온보딩 강도 ↔ 번아웃 손익분기 (원래 취지)")
     ap.add_argument("--fit-sensitivity", type=float, default=1.1,
                     help="4제약/온보딩 분석에 사용할 번아웃 민감도")
+    ap.add_argument("--ref-mode", choices=("absolute", "relative"), default="absolute",
+                    help="번아웃 기준선 모드 (relative=스케일 불변, 권장)")
+    ap.add_argument("--attachment", type=float, default=0.0,
+                    help="진도→애착(리텐션 상승) 계수. 0이면 애착 채널 없음")
+    ap.add_argument("--verify-d7-link", action="store_true",
+                    help="D7 진도 ↔ D30 잔존 상관 검증 (목표 타당성)")
     ap.add_argument("--longterm-days", type=int, default=60)
     ap.add_argument("--burnout-factor", type=float, default=0.6,
                     help="번아웃 시나리오의 리텐션 감쇠 가속 계수(<1)")
@@ -1642,6 +1805,9 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = Config()
+    if args.ref_mode != "absolute" or args.attachment > 0.0:
+        cfg = replace(cfg, burnout_ref_mode=args.ref_mode,
+                      burnout_attachment_coef=args.attachment)
     res = run_batch(cfg, args.days, args.trials)
     report(cfg, res, args.days, args.trials)
 
@@ -1695,6 +1861,12 @@ def main() -> None:
                        days=args.grid_days, trials=args.grid_trials,
                        burn_days=args.longterm_days,
                        burn_trials=max(60, args.trials // 3))
+
+    if args.verify_d7_link:
+        verify_d7_retention_link(cfg, SHORTS_RETENTION, args.fit_sensitivity,
+                                 days=args.longterm_days,
+                                 trials=max(200, args.trials),
+                                 attachment=(args.attachment or 0.5))
 
     if args.onboard_intensity and fitted:
         curve, _ = fitted[args.fit_sensitivity]
