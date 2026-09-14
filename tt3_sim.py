@@ -27,7 +27,7 @@ import math
 import random
 import statistics
 from dataclasses import dataclass, field, replace
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # ============================================================
 # 1. 설계 파라미터 (v4 문서의 수치를 그대로 코드화)
@@ -84,6 +84,10 @@ class Config:
     # 장기 곡선(B/A 밸런스)에는 영향을 주지 않는다.
     onboarding: bool = False            # True일 때만 온보딩 예외 활성화
     onboarding_tau_h: float = 0.8       # ★ 첫 회차 한정 진행 시상수
+    # 번아웃 계수: 온보딩 유저의 초반 과보상이 콘텐츠 소진을 앞당긴다는 가설.
+    # <1.0이면 온보딩 유저의 리텐션 감쇠 시상수를 그만큼 단축(=조기 이탈 가속).
+    # 1.0이면 번아웃 없음(순수 온보딩 효과만 관측). ★ 실측 없는 '가정' 파라미터.
+    onboarding_burnout_factor: float = 1.0
 
     # --- 축복 3택1 (랜덤성 주입원) ---
     # (확률, 다음 세션까지 적용되는 배율, 클립트리거 여부)
@@ -125,15 +129,54 @@ ONBOARDING_PERSONAS = frozenset({"D_쇼츠유입"})
 
 
 # ============================================================
+# 2b. 리텐션 곡선 (일별 접속 확률 모델)
+# ============================================================
+
+
+@dataclass(frozen=True)
+class RetentionCurve:
+    """일별 접속(활성) 확률을 지수감쇠로 모델링.
+
+        p(day) = p_inf + (p0 - p_inf) * exp(-day / decay_days)
+
+    day는 0-indexed(설치 당일=0). 실측 로그가 없어 업계 캐주얼/하이퍼캐주얼
+    벤치마크(쇼츠 유입 D1≈100%, D7 40%대, D30 10%대)를 근거로 합성한 '가정'.
+    실측 확보 시 to_rows() CSV를 교체하면 그대로 반영된다.
+    """
+    name: str = "shorts"
+    p0: float = 1.00            # 설치 당일 활성 확률
+    p_inf: float = 0.12         # 장기 바닥 잔존 확률
+    decay_days: float = 6.0     # 감쇠 시상수(일). 작을수록 급락
+
+    def prob(self, day0: int) -> float:
+        return self.p_inf + (self.p0 - self.p_inf) * math.exp(-day0 / self.decay_days)
+
+    def to_rows(self, days: int) -> List[Dict[str, float]]:
+        return [{"day": d + 1, "active_prob": round(self.prob(d), 4)} for d in range(days)]
+
+
+# 쇼츠 유입 전형 곡선(합성): D1 100% → D7 ~44% → D30 ~13%
+SHORTS_RETENTION = RetentionCurve(name="shorts", p0=1.00, p_inf=0.12, decay_days=6.0)
+
+# 페르소나별 리텐션 곡선. 미지정 시 상시 접속(리텐션 게이트 없음).
+PERSONA_RETENTION: Dict[str, RetentionCurve] = {
+    "D_쇼츠유입": SHORTS_RETENTION,
+}
+
+
+# ============================================================
 # 3. 시뮬레이션 엔진
 # ============================================================
 
 
 class Player:
-    def __init__(self, cfg: Config, schedule: List[float], rng: random.Random):
+    def __init__(self, cfg: Config, schedule: List[float], rng: random.Random,
+                 retention: Optional[RetentionCurve] = None):
         self.cfg = cfg
         self.schedule = schedule
         self.rng = rng
+        self.retention = retention      # None이면 상시 접속(게이트 없음)
+        self.active_days = 0            # 실제 접속한 일수(리텐션 통과)
 
         self.t = 0.0                    # 시뮬레이션 절대 시각(시)
         self.smax_base = cfg.smax_initial
@@ -306,6 +349,26 @@ class Player:
     # ---- 하루 실행 ----
     def run_day(self, day: int) -> None:
         day_start = day * 24.0
+
+        # ★ 리텐션 게이트: 곡선이 있으면 그날 접속 여부를 확률로 판정.
+        #   미접속일에도 1층 금화는 오프라인 누적(체크인 빈도와 무관 설계 유지),
+        #   2층 균열석/연쇄는 발생하지 않는다.
+        if self.retention is not None and self.rng.random() > self.retention.prob(day):
+            snap_gold, snap_rift = self.gold_units, self.rift_units
+            self.accrue_gold(day_start + 24.0)
+            self.daily_log.append({
+                "day": day + 1,
+                "gold": self.gold_units - snap_gold,
+                "rift": self.rift_units - snap_rift,
+                "smax": self.smax,
+                "active": 0,
+                "checkins": 0,
+            })
+            self.chain_today = 0
+            return
+
+        self.active_days += 1
+        checks_before = self.checkins
         times = []
         for base in self.schedule:
             if self.rng.random() < self.cfg.skip_prob:
@@ -334,6 +397,8 @@ class Player:
                 "gold": self.gold_units - snap_gold,
                 "rift": self.rift_units - snap_rift,
                 "smax": self.smax,
+                "active": 1,
+                "checkins": self.checkins - checks_before,
             }
         )
         self.chain_today = 0            # 일일 연쇄 초기화
@@ -347,13 +412,38 @@ def layer2_share(p: Player, cfg: Config) -> float:
     return p.rift_units / max(1e-9, growth_units(p, cfg))
 
 
-def simulate(cfg: Config, name: str, days: int, seed: int) -> Player:
+def simulate(
+    cfg: Config,
+    name: str,
+    days: int,
+    seed: int,
+    *,
+    onboarding: Optional[bool] = None,
+    apply_retention: bool = False,
+    retention: Optional[RetentionCurve] = None,
+) -> Player:
+    """단일 페르소나 시뮬레이션.
+
+    onboarding      : None이면 페르소나 기본값(D=온보딩 on), True/False로 강제 가능
+    apply_retention : True면 PERSONA_RETENTION 곡선을 적용(기본 off → 기존 검증 보존)
+    retention       : 곡선을 직접 주입(apply_retention보다 우선)
+    """
     rng = random.Random(seed)
-    # 온보딩 페르소나는 첫 승급 예외를 켠 config 사본으로 실행한다.
-    # (다른 페르소나·전역 밸런스에는 영향을 주지 않도록 사본만 교체)
-    if name in ONBOARDING_PERSONAS and not cfg.onboarding:
+
+    ob = (name in ONBOARDING_PERSONAS) if onboarding is None else onboarding
+    if ob and not cfg.onboarding:
         cfg = replace(cfg, onboarding=True)
-    p = Player(cfg, PERSONAS[name], rng)
+    elif not ob and cfg.onboarding:
+        cfg = replace(cfg, onboarding=False)
+
+    ret = retention
+    if ret is None and apply_retention:
+        ret = PERSONA_RETENTION.get(name)
+    # ★ 번아웃 가설: 온보딩 유저 + 리텐션 활성 + factor<1 → 감쇠 시상수 단축
+    if ret is not None and ob and cfg.onboarding_burnout_factor < 1.0:
+        ret = replace(ret, decay_days=ret.decay_days * cfg.onboarding_burnout_factor)
+
+    p = Player(cfg, PERSONAS[name], rng, retention=ret)
     for d in range(days):
         p.run_day(d)
     return p
@@ -696,6 +786,254 @@ def plot_grid(rows: List[Dict[str, object]], path: str = "chain_grid.png") -> No
 
 
 # ============================================================
+# 5e. 2변수 동시 탐색 (chain_scale × rift_to_unit)
+# ============================================================
+
+# chain_mults를 스칼라 1노브로 압축: mult = 1 + (base-1)*scale.
+# 여기에 rift_to_unit(2층 가치)를 2번째 축으로 더해 목표 박스 진입을 탐색.
+GRID_CHAIN_SCALE: Tuple[float, ...] = (4.0, 6.0, 8.0, 10.0, 12.0, 14.0)
+GRID_RIFT_UNIT: Tuple[float, ...] = (2.2, 2.6, 3.0, 3.4, 3.8)
+
+
+def _scaled_mults(base: Tuple[float, ...], scale: float) -> Tuple[float, ...]:
+    return tuple(1.0 + (m - 1.0) * scale for m in base)
+
+
+def grid_search_2d(
+    cfg: Config, days: int = 30, trials: int = 60, seed0: int = 1
+) -> List[Dict[str, object]]:
+    """chain_scale × rift_to_unit 2D 그리드 탐색.
+
+    단일축(chain_mults만) 탐색에서는 연쇄기여와 B/A가 강하게 동조해
+    연쇄 8%+ 지점이 B/A 상한(1.80)에 붙어버린다. rift_to_unit(2층 가치)을
+    2번째 레버로 추가하면 두 지표를 분리해 더 낮은 B/A에서 목표 연쇄기여를
+    달성할 수 있는지 검증한다.
+    """
+    base = cfg.chain_mults
+    print("\n" + BAR)
+    print(f" 2D 그리드 (chain_scale × rift_to_unit) | {days}일 × {trials}회 | "
+          f"제약: B/A∈[{BA_LO},{BA_HI}], 연쇄∈[{int(CHAIN_LO*100)}%,{int(CHAIN_HI*100)}%]")
+    print(BAR)
+
+    rows: List[Dict[str, object]] = []
+    for scale in GRID_CHAIN_SCALE:
+        for r2u in GRID_RIFT_UNIT:
+            mults = _scaled_mults(base, scale)
+            trial_cfg = replace(cfg, chain_mults=mults, rift_to_unit=r2u)
+            ratio, chain = _ba_and_chain(trial_cfg, days, trials, seed0)
+            valid = (BA_LO <= ratio <= BA_HI) and (CHAIN_LO <= chain <= CHAIN_HI)
+            score = abs(chain - CHAIN_TARGET) * 10.0 + abs(ratio - 1.70)
+            rows.append({
+                "scale": scale, "rift_to_unit": r2u, "mults": mults,
+                "ratio": ratio, "chain": chain, "valid": valid, "score": score,
+            })
+
+    # 2D 표: 행=chain_scale, 열=rift_to_unit, 셀="B/A|연쇄%" (유효 셀은 ★)
+    print(" [연쇄기여% / B/A]  행=chain_scale, 열=rift_to_unit")
+    header = "  scale\\r2u " + "".join(f"{r:>12.1f}" for r in GRID_RIFT_UNIT)
+    print(header)
+    print("-" * len(header))
+    for scale in GRID_CHAIN_SCALE:
+        cells = []
+        for r2u in GRID_RIFT_UNIT:
+            r = next(x for x in rows if x["scale"] == scale and x["rift_to_unit"] == r2u)
+            mark = "*" if r["valid"] else " "
+            cells.append(f"{r['chain']*100:>4.1f}/{r['ratio']:>4.2f}{mark}")
+        print(f"  {scale:>7.1f} " + "".join(f"{c:>12}" for c in cells))
+    print("-" * len(header))
+
+    valid_rows = sorted([r for r in rows if r["valid"]], key=lambda r: r["score"])
+    top5 = valid_rows[:5]
+    print(f"\n 조건 만족 상위 {min(5, len(top5))}개 (탐색 {len(rows)}개 중 {len(valid_rows)}개 유효):")
+    print(f"{'순위':<4}{'scale':>7}{'r2u':>7}{'B/A':>9}{'연쇄기여':>10}   chain_mults")
+    print("-" * 76)
+    src = top5 if top5 else sorted(rows, key=lambda r: r["score"])[:5]
+    for i, r in enumerate(src, 1):
+        mstr = "(" + ", ".join(f"{m:.2f}" for m in r["mults"]) + ")"
+        tag = "✓" if r["valid"] else "≈"
+        print(f"{i:<4}{r['scale']:>7.1f}{r['rift_to_unit']:>7.1f}{r['ratio']:>9.3f}"
+              f"{r['chain']*100:>8.1f}% {tag}  {mstr}")
+    print(BAR)
+    return rows
+
+
+def plot_grid_2d(rows: List[Dict[str, object]], path: str = "chain_grid_2d.png") -> None:
+    """2D 탐색 산점도: x=B/A, y=연쇄기여%, 색=rift_to_unit, 유효점은 테두리 강조."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("\n[matplotlib 미설치 → 텍스트 요약은 위 2D 표 참조]")
+        return
+
+    fig, ax = plt.subplots(figsize=(8.5, 6))
+    ax.axvspan(BA_LO, BA_HI, color="#cfe8cf", alpha=0.35, zorder=0)
+    ax.axhspan(CHAIN_LO * 100, CHAIN_HI * 100, color="#cfd8e8", alpha=0.35, zorder=0)
+
+    xs = [r["ratio"] for r in rows]
+    ys = [r["chain"] * 100 for r in rows]
+    cs = [r["rift_to_unit"] for r in rows]
+    edge = ["black" if r["valid"] else "none" for r in rows]
+    lw = [1.6 if r["valid"] else 0.0 for r in rows]
+    sc = ax.scatter(xs, ys, c=cs, cmap="viridis", s=90, zorder=2,
+                    edgecolors=edge, linewidths=lw)
+    cb = fig.colorbar(sc, ax=ax)
+    cb.set_label("rift_to_unit (layer-2 value)")
+
+    ax.axvline(1.70, color="#666", ls="--", lw=0.8)
+    ax.axhline(CHAIN_TARGET * 100, color="#666", ls="--", lw=0.8)
+    ax.set_xlabel("B/A ratio")
+    ax.set_ylabel("Chain contribution (%)")
+    ax.set_title("2D grid: chain_scale x rift_to_unit\n"
+                 "(black edge = valid; target box B/A 1.60-1.80, chain 8-12%)")
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+    print(f"\n2D 산점도 저장: {path}")
+
+
+# ============================================================
+# 5f. 온보딩 장기(60일) 부작용 분석 — 번아웃 가설
+# ============================================================
+
+
+def _longterm_metrics(
+    cfg: Config, name: str, days: int, trials: int,
+    onboarding: bool, apply_retention: bool, seed0: int = 1,
+) -> Dict[str, float]:
+    units, smaxes, act, early, mid, late = [], [], [], [], [], []
+    for k in range(trials):
+        p = simulate(cfg, name, days, seed0 + k * 7919,
+                     onboarding=onboarding, apply_retention=apply_retention)
+        units.append(growth_units(p, cfg))
+        smaxes.append(p.smax)
+        act.append(p.active_days)
+        early.append(sum(d.get("checkins", 0) for d in p.daily_log[:7]))
+        # 중기(D8~30): 리텐션 바닥에 닿기 전 구간 → 번아웃(조기 이탈) 신호가 뚜렷
+        mid.append(sum(d.get("checkins", 0) for d in p.daily_log[7:30]))
+        late.append(sum(d.get("checkins", 0) for d in p.daily_log[-7:]))
+    return {
+        "units": statistics.fmean(units),
+        "smax": statistics.fmean(smaxes),
+        "active_days": statistics.fmean(act),
+        "early7_checks": statistics.fmean(early),
+        "mid_checks": statistics.fmean(mid),
+        "late7_checks": statistics.fmean(late),
+    }
+
+
+def analyze_onboarding_longterm(
+    cfg: Config, days: int = 60, trials: int = 300,
+    burnout_factor: float = 0.6, seed0: int = 1,
+) -> Dict[str, Dict[str, float]]:
+    """60일 지평에서 온보딩의 장기 부작용(번아웃)을 3개 시나리오로 비교.
+
+      S0 대조군   : 온보딩 OFF + 리텐션 곡선
+      S1 온보딩   : 온보딩 ON  + 리텐션 곡선 (번아웃 없음, factor=1.0)
+      S2 번아웃가정: 온보딩 ON  + 리텐션 곡선 + 번아웃(factor<1 → 감쇠 가속)
+
+    지표: 최종 성장단위/s_max, 총 활성일수, 최근 7·14일 체크인(잔존 engagement).
+    S1이 S0 대비 성장은 앞서되 late7 engagement가 유지되면 순효과 긍정.
+    S2에서 late7이 S0보다 떨어지면 '초반 과보상→조기 이탈' 가설이 성립.
+    """
+    scenarios = {
+        "S0 대조(온보딩OFF)": (Config(**{**cfg.__dict__}), False, True),
+        "S1 온보딩(번아웃X)": (replace(cfg, onboarding_burnout_factor=1.0), True, True),
+        f"S2 온보딩+번아웃x{burnout_factor}": (
+            replace(cfg, onboarding_burnout_factor=burnout_factor), True, True),
+    }
+
+    print("\n" + BAR)
+    print(f" 온보딩 장기 부작용 분석 | D_쇼츠유입 | {days}일 × {trials}회 | 리텐션 곡선 적용")
+    print(BAR)
+    print(f"{'시나리오':<24}{'성장단위':>11}{'s_max':>7}{'활성일':>7}"
+          f"{'초7':>7}{'중기8-30':>9}{'말7':>6}")
+    print("-" * 76)
+
+    out: Dict[str, Dict[str, float]] = {}
+    for label, (c, ob, ret) in scenarios.items():
+        m = _longterm_metrics(c, "D_쇼츠유입", days, trials, ob, ret, seed0)
+        out[label] = m
+        print(f"{label:<24}{m['units']:>11,.0f}{m['smax']:>7,.0f}"
+              f"{m['active_days']:>7.1f}{m['early7_checks']:>7.1f}"
+              f"{m['mid_checks']:>9.1f}{m['late7_checks']:>6.1f}")
+    print("-" * 76)
+
+    s0 = out["S0 대조(온보딩OFF)"]
+    s1 = out["S1 온보딩(번아웃X)"]
+    s2 = out[f"S2 온보딩+번아웃x{burnout_factor}"]
+
+    print(f" S1/S0 성장단위 : {s1['units']/max(1e-9,s0['units']):.4f}  "
+          f"→ 온보딩 순효과 {'없음(첫 승급 boost가 log 환류에 흡수)' if abs(s1['units']/max(1e-9,s0['units'])-1)<0.01 else '있음'}")
+    print(f" S2/S0 활성일수 : {s2['active_days']/max(1e-9,s0['active_days']):.3f}  "
+          f"(번아웃 가정 시 접속일 변화)")
+    print(f" S2/S0 중기체크인: {s2['mid_checks']/max(1e-9,s0['mid_checks']):.3f}  "
+          f"{'✗ 번아웃 실현(가정 하 D8~30 참여↓)' if s2['mid_checks']<s0['mid_checks']*0.98 else '✓ 견딤'}")
+    print(f" S2/S0 성장단위 : {s2['units']/max(1e-9,s0['units']):.3f}  "
+          f"(번아웃 시 60일 총 성장 손실)")
+    print(BAR)
+    print(" ※ 온보딩(첫 승급 tau 단축)의 장기 순효과는 ~0. 번아웃은 실측 없는 '가정'이며")
+    print("   S2는 온보딩 유저의 리텐션 감쇠를 factor배로 강제 가속한 대조 시나리오이다.")
+    print(BAR)
+    return out
+
+
+def plot_longterm(
+    cfg: Config, days: int = 60, trials: int = 200,
+    burnout_factor: float = 0.6, path: str = "onboarding_longterm.png", seed0: int = 1,
+) -> None:
+    """3개 시나리오의 일별 평균 체크인(engagement) 추이를 선그래프로 저장."""
+    def daily_checkin_curve(c: Config, ob: bool) -> List[float]:
+        acc = [0.0] * days
+        for k in range(trials):
+            p = simulate(c, "D_쇼츠유입", days, seed0 + k * 7919,
+                         onboarding=ob, apply_retention=True)
+            for i, d in enumerate(p.daily_log[:days]):
+                acc[i] += d.get("checkins", 0)
+        return [a / trials for a in acc]
+
+    curves = {
+        "S0 baseline (no onboarding)": daily_checkin_curve(
+            replace(cfg, onboarding_burnout_factor=1.0), False),
+        "S1 onboarding (no burnout)": daily_checkin_curve(
+            replace(cfg, onboarding_burnout_factor=1.0), True),
+        f"S2 onboarding + burnout x{burnout_factor}": daily_checkin_curve(
+            replace(cfg, onboarding_burnout_factor=burnout_factor), True),
+    }
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("\n[matplotlib 미설치 → 일별 engagement 텍스트 요약]")
+        for label, cur in curves.items():
+            head = " ".join(f"{v:.2f}" for v in cur[:7])
+            tail = " ".join(f"{v:.2f}" for v in cur[-7:])
+            print(f" {label}\n   D1-7: {head}\n   말7 : {tail}")
+        return
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    xs = list(range(1, days + 1))
+    colors = {"S0": "#4c72b0", "S1": "#dd8452", "S2": "#c44e52"}
+    for label, cur in curves.items():
+        key = label.split()[0]
+        ax.plot(xs, cur, label=label, lw=1.8, color=colors.get(key))
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Avg check-ins / day (engagement)")
+    ax.set_title(f"Onboarding long-term engagement ({days} days, retention curve applied)")
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+    print(f"\n장기 engagement 그래프 저장: {path}")
+
+
+# ============================================================
 # 6. 엔트리포인트
 # ============================================================
 
@@ -711,10 +1049,19 @@ def main() -> None:
                     help="D_쇼츠유입 온보딩 7일 80% 도달 검증")
     ap.add_argument("--grid", action="store_true",
                     help="chain_mults 그리드 탐색 (연쇄기여 8~12% 조합)")
+    ap.add_argument("--grid2d", action="store_true",
+                    help="chain_scale × rift_to_unit 2변수 동시 탐색")
     ap.add_argument("--grid-trials", type=int, default=80)
     ap.add_argument("--grid-days", type=int, default=30)
     ap.add_argument("--plot-path", type=str, default="chain_grid.png",
                     help="그리드 산점도 저장 경로")
+    ap.add_argument("--longterm", action="store_true",
+                    help="온보딩 60일 장기 부작용(번아웃) 분석")
+    ap.add_argument("--longterm-days", type=int, default=60)
+    ap.add_argument("--burnout-factor", type=float, default=0.6,
+                    help="번아웃 시나리오의 리텐션 감쇠 가속 계수(<1)")
+    ap.add_argument("--retention-csv", type=str, default="",
+                    help="쇼츠 유입 리텐션 곡선 CSV 저장 경로")
     args = ap.parse_args()
 
     cfg = Config()
@@ -727,6 +1074,25 @@ def main() -> None:
     if args.grid:
         rows = grid_search_chain_mults(cfg, days=args.grid_days, trials=args.grid_trials)
         plot_grid(rows, args.plot_path)
+
+    if args.grid2d:
+        rows2d = grid_search_2d(cfg, days=args.grid_days, trials=args.grid_trials)
+        plot_grid_2d(rows2d, "chain_grid_2d.png")
+
+    if args.retention_csv:
+        with open(args.retention_csv, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=["day", "active_prob"])
+            w.writeheader()
+            w.writerows(SHORTS_RETENTION.to_rows(args.longterm_days))
+        print(f"\n리텐션 곡선 저장: {args.retention_csv}")
+
+    if args.longterm:
+        analyze_onboarding_longterm(
+            cfg, days=args.longterm_days, trials=args.trials,
+            burnout_factor=args.burnout_factor)
+        plot_longterm(
+            cfg, days=args.longterm_days, trials=min(args.trials, 200),
+            burnout_factor=args.burnout_factor, path="onboarding_longterm.png")
 
     if args.sweep:
         rows = run_sweep(cfg, args.days, args.sweep_trials)
