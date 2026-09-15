@@ -81,13 +81,38 @@
   .retry .sub{font-size:12px;opacity:.85}
 
   .tapzone{
-    flex:1;min-height:0;width:100%;display:grid;place-items:center;
+    flex:1;min-height:0;width:100%;
     appearance:none;border:0;background:none;padding:0;cursor:pointer;
     touch-action:manipulation;user-select:none;
+    display:flex;align-items:flex-end;justify-content:space-between;gap:6px;
+    position:relative;
   }
   .tapzone:focus-visible{outline:3px solid var(--gold);outline-offset:-6px;border-radius:14px}
-  .tapzone svg{width:min(46vw,168px);height:auto;filter:drop-shadow(0 6px 18px rgba(224,52,46,.3))}
-  .tapzone.hit svg{animation:shake .18s ease}
+  /* 발밑 지면 — 대열과 타이탄이 같은 바닥에 서 있어 보이게 한다 */
+  .tapzone::after{
+    content:"";position:absolute;left:0;right:0;bottom:6px;height:2px;
+    background:linear-gradient(90deg,transparent,rgba(120,100,180,.5) 18%,rgba(120,100,180,.5) 82%,transparent);
+  }
+  .titanwrap{flex:none;position:relative;padding-bottom:8px}
+  .titanwrap svg{width:min(34vw,124px);height:auto;display:block;filter:drop-shadow(0 6px 18px rgba(224,52,46,.3))}
+  .tapzone.hit .titanwrap svg{animation:shake .18s ease}
+
+  /* 아군 대열 — 고용할수록 한 명씩 늘어선다 */
+  .party{
+    flex:1;min-width:0;display:flex;align-items:flex-end;justify-content:flex-start;
+    padding-bottom:8px;padding-left:2px;
+  }
+  .fighter{
+    flex:none;width:34px;margin-right:-11px;position:relative;
+    animation:bob 1.8s ease-in-out infinite;
+  }
+  .fighter.master{width:40px;margin-right:-8px;z-index:9}
+  .fighter svg{width:100%;height:auto;display:block}
+  .fighter.atk{animation:lunge .9s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}
+  @keyframes lunge{0%,100%{transform:translateX(0)}42%{transform:translateX(6px)}}
+  .fighter.swing{animation:swing .22s ease}
+  @keyframes swing{0%,100%{transform:translateX(0)}45%{transform:translateX(9px)}}
   @keyframes shake{0%,100%{transform:translateX(0)}30%{transform:translateX(-6px) rotate(-3deg)}70%{transform:translateX(5px) rotate(3deg)}}
   .aura{animation:breathe 3.4s ease-in-out infinite;transform-origin:center}
   @keyframes breathe{0%,100%{opacity:.22}50%{opacity:.52}}
@@ -346,6 +371,8 @@
     </div>
 
     <button type="button" class="tapzone" id="tapzone" aria-label="타이탄 공격">
+      <span class="party" id="party"></span>
+      <span class="titanwrap">
       <svg viewBox="0 0 120 124" role="img" aria-hidden="true">
         <ellipse class="aura" cx="60" cy="74" rx="54" ry="48" fill="var(--foe-aura,#1D8C81)" opacity=".3"/>
         <path d="M32 44 L19 12 L47 35 Z" fill="var(--foe-horn,#6B4FA8)"/>
@@ -359,6 +386,7 @@
         <path d="M43 92 Q60 105 77 92 Q60 98 43 92 Z" fill="#160C2E"/>
         <path d="M49 94 L52 100 L55 94 Z M65 94 L68 100 L71 94 Z" fill="#E8DFFF"/>
       </svg>
+      </span>
     </button>
 
     <div class="timing">
@@ -539,6 +567,46 @@ const HEROES = [
 ];
 const FOES = ["균열 파편","균열 수호병","균열 거인","균열 군주","태고의 티탄"];
 
+/* ── 아군 스프라이트 ───────────────────────────────────────────────
+   자체 디자인이다. 8명을 손으로 그리는 대신 색 3개 + 무기 종류 하나를
+   데이터로 두고 한 함수가 찍어낸다 — 실루엣은 같고 색과 무기로 구분된다.
+   외부 이미지는 아티팩트 샌드박스가 막으므로 전부 코드로 그린다. */
+const ART = [
+  { body:"#C0392B", trim:"#F5B041", skin:"#F0C9A0", w:"sword"      },
+  { body:"#2E86C1", trim:"#AED6F1", skin:"#F0C9A0", w:"bow"        },
+  { body:"#7D3C98", trim:"#D2B4DE", skin:"#EFC7A4", w:"staff"      },
+  { body:"#1E8449", trim:"#A9DFBF", skin:"#E8B88A", w:"shield"     },
+  { body:"#4A235A", trim:"#BB8FCE", skin:"#D7BDE2", w:"dagger"     },
+  { body:"#D4AC0D", trim:"#FCF3CF", skin:"#F0C9A0", w:"spear"      },
+  { body:"#A93226", trim:"#F1948A", skin:"#E8B88A", w:"twin"       },
+  { body:"#5D6D7E", trim:"#EAECEE", skin:"#F0C9A0", w:"greatsword" },
+];
+const MASTER = { body:"#2C3E80", trim:"#FFC83D", skin:"#F0C9A0", w:"sword" };
+
+function weaponSvg(w, c) {
+  switch (w) {
+    case "sword":      return `<rect x="19" y="9" width="2.4" height="14" rx="1.2" fill="${c}"/><rect x="17" y="13.5" width="6.6" height="2" rx="1" fill="${c}"/>`;
+    case "bow":        return `<path d="M20.4 9 Q24.2 17 20.4 25" stroke="${c}" stroke-width="1.9" fill="none" stroke-linecap="round"/><path d="M20.4 9 L20.4 25" stroke="${c}" stroke-width=".7"/>`;
+    case "staff":      return `<rect x="19.5" y="11" width="1.9" height="15" rx="1" fill="${c}"/><circle cx="20.4" cy="9" r="3" fill="${c}"/>`;
+    case "shield":     return `<path d="M17.4 12 h6.4 v6 q0 4.2 -3.2 5.8 q-3.2 -1.6 -3.2 -5.8 z" fill="${c}"/>`;
+    case "dagger":     return `<path d="M20.6 12.5 l2.3 4.2 l-2.3 4.2 l-2.3 -4.2 z" fill="${c}"/>`;
+    case "spear":      return `<rect x="19.7" y="9" width="1.7" height="17" rx=".9" fill="${c}"/><path d="M20.5 4 l2.7 5.6 h-5.4 z" fill="${c}"/>`;
+    case "twin":       return `<rect x="17.2" y="11.5" width="1.9" height="10.5" rx="1" fill="${c}" transform="rotate(-15 18.1 16.7)"/><rect x="21.4" y="11.5" width="1.9" height="10.5" rx="1" fill="${c}" transform="rotate(15 22.3 16.7)"/>`;
+    case "greatsword": return `<rect x="18.3" y="5.5" width="4.2" height="18" rx="1.7" fill="${c}"/><rect x="16.2" y="14" width="8.4" height="2.3" rx="1.1" fill="${c}"/>`;
+  }
+  return "";
+}
+function unitSvg(a) {
+  return `<svg viewBox="0 0 26 34" role="img" aria-hidden="true">
+    <ellipse cx="12" cy="31.2" rx="7.6" ry="2.2" fill="rgba(0,0,0,.4)"/>
+    <path d="M5 30 q0 -12.5 7 -12.5 q7 0 7 12.5 z" fill="${a.body}"/>
+    <path d="M7.6 30 q0 -9 4.4 -9 q4.4 0 4.4 9 z" fill="${a.trim}" opacity=".4"/>
+    <circle cx="12" cy="12" r="5.3" fill="${a.skin}"/>
+    <path d="M6.9 11.4 q0 -6.2 5.1 -6.2 q5.1 0 5.1 6.2 q-2 -2.7 -5.1 -2.7 q-3.1 0 -5.1 2.7 z" fill="${a.body}"/>
+    ${weaponSvg(a.w, a.trim)}
+  </svg>`;
+}
+
 /* ── 2층: tt3_sim.py Config 그대로 ───────────────────────────────── */
 const CFG = {
   stackBase: 60, stackCap: 5, stackIntervalH: 55/60,
@@ -705,6 +773,8 @@ let hintTimer = 0;
 function onTap(evt) {
   const z = document.getElementById("tapzone");
   z.classList.remove("hit"); void z.offsetWidth; z.classList.add("hit");
+  const m = document.querySelector(".fighter.master");
+  if (m) { m.classList.remove("swing"); void m.offsetWidth; m.classList.add("swing"); }
 
   const j = judge(mk.pos);
   damage(tapDamage() * j.mult * tapBuff(), evt, j.cls === "p");
@@ -953,6 +1023,20 @@ function render() {
   document.getElementById("foeCount").textContent = boss ? "보스전"
     : S.bossPending ? `${F.mobsPerStage} / ${F.mobsPerStage} · 보스 대기`
     : `${S.mob} / ${F.mobsPerStage}`;
+  // 아군 대열 — 고용한 영웅 수가 바뀔 때만 다시 그린다
+  const party = document.getElementById("party");
+  const sig = S.heroLv.map((lv) => (lv > 0 ? 1 : 0)).join("");
+  if (party.dataset.sig !== sig) {
+    party.dataset.sig = sig;
+    let html = `<span class="fighter master atk">${unitSvg(MASTER)}</span>`;
+    HEROES.forEach((h, i) => {
+      if (S.heroLv[i] > 0) {
+        html += `<span class="fighter atk" style="animation-delay:${(i * 0.13).toFixed(2)}s" title="${h.n}">${unitSvg(ART[i])}</span>`;
+      }
+    });
+    party.innerHTML = html;
+  }
+
   const rb = document.getElementById("retry");
   rb.hidden = !S.bossPending;
   if (S.bossPending) document.getElementById("retrySub").textContent = `제한시간 ${F.bossSeconds}초`;
@@ -1258,6 +1342,11 @@ function selfCheck() {
   t("판정으로 차는 쪽이 자연 회복보다 빠르다", MANA_PERFECT / TIMING.halfMax > MANA_REGEN);
   t("쿨다운이 지속보다 길다 (상시 유지 불가)", SKILLS.every(k => k.cd > k.dur));
   t("즉발 스킬은 지속이 없다", SK.crush.dur === 0);
+
+  // 대열 — 영웅마다 스프라이트가 있어야 고용 순서대로 늘어선다
+  t("영웅 수와 스프라이트 수가 같다", ART.length === HEROES.length);
+  t("모든 무기가 실제로 그려진다", ART.every(a => weaponSvg(a.w, "#fff").length > 0));
+  t("영웅마다 색이 다르다", new Set(ART.map(a => a.body)).size === ART.length);
 
   if (fails.length) console.error("[균열의 티탄] 점검 실패:", fails);
   else console.info(`[균열의 티탄] 경제 점검 ${ran}항목 통과 — 2층은 tt3_sim.py 확정값과 일치`);
