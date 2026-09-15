@@ -38,7 +38,11 @@ from typing import Dict, List, Optional, Tuple
 class Config:
     # --- 2층: 균열석 ---
     stack_base: float = 60.0            # 스택 1개당 균열석 기본량
-    stack_cap: int = 3                  # 동시 보유 스택 상한
+    # ★ 3 → 5 확정. stack_cap 상향은 '헤비 제동' 노브다: 상한을 올리면
+    #   A +21.1% / B +22.2% / C +6.1%로 저빈도가 가장 많이 이득을 본다
+    #   (diagnose_stack_cap_usage). 연쇄 보상은 체크인 횟수에 비례해 헤비에게
+    #   몰리므로, C/A를 눌러 그 쏠림을 상쇄하는 데 이 노브를 쓴다.
+    stack_cap: int = 5                  # 동시 보유 스택 상한
     # ★ 55분. 60분 정각으로 두면 체크인 시각 흔들림과 경주가 되어
     #   약 50% 확률로 '스택 0개' 헛걸음이 발생한다 (시뮬레이션으로 발견된 함정).
     stack_interval_h: float = 55.0 / 60.0
@@ -55,14 +59,19 @@ class Config:
     chain_window_h: float = 1.5         # 90분 이내 재수령 시 연쇄 인정
     chain_mults: Tuple[float, ...] = (1.05, 1.10, 1.18, 1.26, 1.35)
     chain_daily_cap: int = 5            # ★ 일 5회 상한 (근무일 내 완주 가능)
-    chain_complete_bonus: float = 120.0  # 5연쇄 완주 보너스 균열석
+    chain_complete_bonus: float = 440.0  # 5연쇄 완주 보너스 균열석 (확정: 120 → 440)
     # 완주 보너스 지급 방식. False(기본)는 완주 시 전액 일괄(all-or-nothing)이라
     # 연쇄가 끊긴 날 보상이 통째로 사라져 일일 변동성을 증폭시킨다.
     # True면 연쇄 단계마다 bonus/cap씩 비례 지급하여 같은 총액을 평탄화한다.
-    chain_bonus_graded: bool = False
+    # ★ False → True 확정. 같은 연쇄기여 10%를 만들 때 번아웃 증분이
+    #   A 상시배율 +12.6%p / B 일괄보너스 +27.2%p / C 비례보너스 +2.4%p로,
+    #   비례 지급만 안전 기준을 통과한다(compare_chain_reward_shape).
+    chain_bonus_graded: bool = True
 
     # --- 1층: 금화 (체크인 빈도와 무관해야 함) ---
-    gold_per_hour: float = 100.0        # 정규화 단위
+    # ★ 100 → 130 확정. 1층은 체크인 빈도와 무관하므로 모든 비율의 공통 분모다.
+    #   연쇄 보상을 키우면서 C/A를 경고선 아래로 유지하는 상쇄 노브.
+    gold_per_hour: float = 130.0        # 정규화 단위
     gold_offline_eff: float = 0.90
 
     # --- 환산 ---
@@ -97,8 +106,10 @@ class Config:
     # 핵심 루프 학습용 예외: 온보딩 기간 동안만 연쇄 창을 넓혀, 저빈도 신규 유저도
     # 연쇄를 경험하게 한다. 전역 확대는 헤비(C형)에게 종일 연쇄를 허용해 C/A를
     # 1.97→2.96으로 폭증시키므로(측정), 반드시 온보딩 코호트 한정이어야 한다.
-    # 0이면 예외 없음(기본). 스택 만충 2.75h 이상이어야 분산 체크인과 양립한다.
-    onboarding_chain_window_h: float = 0.0
+    # 0이면 예외 없음. ★ 0.0 → 4.6 확정: 스택 만충(stack_cap 5 x 55분 = 4.58h)
+    #   이상이어야 분산 체크인과 양립한다. 4.6은 그 하한에 맞춘 값이며,
+    #   더 좁으면 온보딩 예외로도 모순이 남는다(validate_config가 잡아낸다).
+    onboarding_chain_window_h: float = 4.6
     # 번아웃 계수: 온보딩 유저의 초반 과보상이 콘텐츠 소진을 앞당긴다는 가설.
     # <1.0이면 온보딩 유저의 리텐션 감쇠 시상수를 그만큼 단축(=조기 이탈 가속).
     # 1.0이면 번아웃 없음(순수 온보딩 효과만 관측). ★ 실측 없는 '가정' 파라미터.
@@ -690,10 +701,14 @@ def report(cfg: Config, res: Dict[str, Result], days: int, trials: int) -> float
         return "✓ 안전 구간"
 
     print(f" B/A 비율      : {ratio:.3f}   목표 1.60~1.80   {verdict(ratio, 1.60, 1.80)}")
-    print(f" C/A 비율      : {ratio_heavy:.3f}   경고선 2.20     "
-          f"{'✓' if ratio_heavy <= 2.20 else '✗ 헤비 독주'}")
-    print(f" 연쇄 기여(B)  : {b.chain_share*100:.1f}%  목표 ~10%      "
-          f"{'✓' if b.chain_share <= 0.20 else '✗ 연쇄 압박 과다'}")
+    print(f" C/A 비율      : {ratio_heavy:.3f}   경고선 {CA_HI:.2f}     "
+          f"{'✓' if ratio_heavy <= CA_HI else '✗ 헤비 독주'}")
+    # 목표 10%는 '연쇄가 장식이 아닌' 하한이기도 하다. 상한만 보면 연쇄기여
+    # 1.5%짜리 빌드까지 ✓로 통과해 설계 실패가 가려진다.
+    ch = b.chain_share
+    ch_v = ("✗ 미달 (연쇄가 장식)" if ch < CHAIN_LO else
+            "✗ 연쇄 압박 과다" if ch > CHAIN_HI else "✓ 안전 구간")
+    print(f" 연쇄 기여(B)  : {ch*100:.1f}%  목표 8~12%     {ch_v}")
     print(f" 2층 비중(B)   : {b.layer2_share*100:.1f}%  권장 40~55%   "
           f"{'✓' if 0.40 <= b.layer2_share <= 0.55 else '✗ 한쪽 축이 장식으로 전락'}")
     print(f" 정상상태 B/A  : {b.steady_units / max(1e-9, a.steady_units):.3f} (최근 7일 기준)")
@@ -800,6 +815,10 @@ GRID_LAST: Tuple[float, ...] = (2.00, 2.60, 3.20, 3.60, 4.00, 4.50, 5.00)
 BA_LO, BA_HI = 1.60, 1.80
 CHAIN_LO, CHAIN_HI = 0.08, 0.12
 CHAIN_TARGET = 0.10
+CA_HI = 2.20                     # 헤비 독주 경고선 (C형/저빈도)
+# 권장안이 경고선에 '정확히' 붙으면 시행 수만 바꿔도 넘어간다. 권장 선정에서는
+# 이만큼 여유가 남는 후보만 본다 (제약 통과 판정 자체는 CA_HI 그대로).
+CA_MARGIN = 0.05
 
 
 def _make_chain_mults(first: float, last: float, n: int = 5) -> Tuple[float, ...]:
@@ -1284,12 +1303,18 @@ L2_LO, L2_HI = 0.40, 0.55        # 2층 비중 권장 구간
 
 GRID3_SCALE: Tuple[float, ...] = (8.0, 11.0, 14.0)
 GRID3_RIFT: Tuple[float, ...] = (2.2, 2.6, 3.0, 3.4)
-GRID3_GOLD: Tuple[float, ...] = (70.0, 85.0, 100.0, 115.0)
+GRID3_GOLD: Tuple[float, ...] = (100.0, 115.0, 130.0, 145.0)
 
 
-def _metrics_3(cfg: Config, days: int, trials: int, seed0: int = 1
-               ) -> Tuple[float, float, float]:
-    """(B/A 비율, B형 연쇄기여, B형 2층비중) 산출."""
+def _balance_metrics(cfg: Config, days: int, trials: int, seed0: int = 1
+                     ) -> Tuple[float, float, float, float]:
+    """(B/A 비율, B형 연쇄기여, B형 2층비중, C/A 비율) 산출.
+
+    ★ C/A가 4번째로 들어간 이유: 연쇄 보상은 체크인 횟수에 비례해 쌓이므로
+      본질적으로 고빈도(C형)에게 몰린다. B/A만 제약에 걸고 연쇄를 키우면
+      C/A가 조용히 경고선(2.20)을 넘는다 — C안 단독 적용이 실제로 1.96→2.39로
+      이 함정에 빠졌다(verify_integrated_candidate). 탐색 1단계에서 같이 잰다.
+    """
     def agg(name: str) -> Tuple[float, float, float]:
         us, ch, l2 = [], [], []
         for k in range(trials):
@@ -1302,7 +1327,8 @@ def _metrics_3(cfg: Config, days: int, trials: int, seed0: int = 1
 
     a_u, _, _ = agg("A_저빈도")
     b_u, b_ch, b_l2 = agg("B_타깃")
-    return b_u / max(1e-9, a_u), b_ch, b_l2
+    c_u, _, _ = agg("C_헤비")
+    return b_u / max(1e-9, a_u), b_ch, b_l2, c_u / max(1e-9, a_u)
 
 
 def grid_search_3d(
@@ -1330,17 +1356,18 @@ def grid_search_3d(
                 mults = _scaled_mults(base, scale)
                 cfg2 = replace(cfg, chain_mults=mults, rift_to_unit=r2u,
                                gold_per_hour=gold)
-                ratio, chain, l2 = _metrics_3(cfg2, days, trials, seed0)
+                ratio, chain, l2, ratio_c = _balance_metrics(cfg2, days, trials, seed0)
                 ok_ba = BA_LO <= ratio <= BA_HI
                 ok_ch = CHAIN_LO <= chain <= CHAIN_HI
                 ok_l2 = L2_LO <= l2 <= L2_HI
-                valid = ok_ba and ok_ch and ok_l2
+                ok_ca = ratio_c <= CA_HI
+                valid = ok_ba and ok_ch and ok_l2 and ok_ca
                 score = (abs(chain - CHAIN_TARGET) * 10.0 + abs(ratio - 1.70)
                          + abs(l2 - 0.475) * 4.0)
                 rows.append({
                     "scale": scale, "rift_to_unit": r2u, "gold": gold, "mults": mults,
-                    "ratio": ratio, "chain": chain, "l2": l2,
-                    "ok_ba": ok_ba, "ok_ch": ok_ch, "ok_l2": ok_l2,
+                    "ratio": ratio, "chain": chain, "l2": l2, "ratio_c": ratio_c,
+                    "ok_ba": ok_ba, "ok_ch": ok_ch, "ok_l2": ok_l2, "ok_ca": ok_ca,
                     "valid": valid, "score": score,
                 })
 
@@ -1556,9 +1583,9 @@ def grid_search_4d(
     """
     base = cfg.chain_mults
     print("\n" + BAR)
-    print(f" 4제약 동시 탐색 | 밸런스 {days}일×{trials}회 + 번아웃 {burn_days}일×{burn_trials}회")
+    print(f" 5제약 동시 탐색 | 밸런스 {days}일×{trials}회 + 번아웃 {burn_days}일×{burn_trials}회")
     print(f" 제약: B/A∈[{BA_LO},{BA_HI}]  연쇄∈[{int(CHAIN_LO*100)},{int(CHAIN_HI*100)}%]  "
-          f"2층∈[{int(L2_LO*100)},{int(L2_HI*100)}%]  B형활성일손실≤{int(BURNOUT_SAFE_LOSS*100)}% (s={sensitivity})")
+          f"2층∈[{int(L2_LO*100)},{int(L2_HI*100)}%]  C/A≤{CA_HI}  B형활성일손실≤{int(BURNOUT_SAFE_LOSS*100)}% (s={sensitivity})")
     print(BAR)
 
     stage1: List[Dict[str, object]] = []
@@ -1567,21 +1594,21 @@ def grid_search_4d(
             for gold in GRID3_GOLD:
                 cfg2 = replace(cfg, chain_mults=_scaled_mults(base, scale),
                                rift_to_unit=r2u, gold_per_hour=gold)
-                ratio, chain, l2 = _metrics_3(cfg2, days, trials, seed0)
+                ratio, chain, l2, ratio_c = _balance_metrics(cfg2, days, trials, seed0)
                 ok = (BA_LO <= ratio <= BA_HI and CHAIN_LO <= chain <= CHAIN_HI
-                      and L2_LO <= l2 <= L2_HI)
+                      and L2_LO <= l2 <= L2_HI and ratio_c <= CA_HI)
                 stage1.append({"scale": scale, "rift_to_unit": r2u, "gold": gold,
                                "cfg": cfg2, "ratio": ratio, "chain": chain,
-                               "l2": l2, "balance_ok": ok})
+                               "l2": l2, "ratio_c": ratio_c, "balance_ok": ok})
     passed = [r for r in stage1 if r["balance_ok"]]
     base_cfg = replace(cfg, burnout_sensitivity=sensitivity,
                        onboarding_burnout_factor=1.0)
     base_loss = _burnout_active_loss(base_cfg, None, burn_days, burn_trials,
                                      seed0, persona="B_타깃")
-    print(f" 1단계: 밸런스 3제약 통과 {len(passed)}/{len(stage1)}개 → 2단계 번아웃 측정")
+    print(f" 1단계: 밸런스 4제약(C/A 포함) 통과 {len(passed)}/{len(stage1)}개 → 2단계 번아웃 측정")
     print(f" 기준선(현행 설계) B형 활성일 손실: {base_loss*100:.1f}% → 증분으로 평가")
     print("-" * 76)
-    print(f"{'scale':>6}{'r2u':>6}{'gold':>6}{'B/A':>8}{'연쇄':>7}{'2층':>7}"
+    print(f"{'scale':>6}{'r2u':>6}{'gold':>6}{'B/A':>8}{'C/A':>8}{'연쇄':>7}{'2층':>7}"
           f"{'번아웃증분':>11}   판정")
     print("-" * 76)
 
@@ -1597,19 +1624,26 @@ def grid_search_4d(
                   "valid": safe})
         rows.append(r)
         print(f"{r['scale']:>6.0f}{r['rift_to_unit']:>6.1f}{r['gold']:>6.0f}"
-              f"{r['ratio']:>8.3f}{r['chain']*100:>6.1f}%{r['l2']*100:>6.1f}%"
-              f"{delta*100:>+9.1f}%p   {'✓ 4제약 만족' if safe else '✗ 번아웃 초과'}")
+              f"{r['ratio']:>8.3f}{r['ratio_c']:>8.3f}{r['chain']*100:>6.1f}%"
+              f"{r['l2']*100:>6.1f}%"
+              f"{delta*100:>+9.1f}%p   {'✓ 5제약 만족' if safe else '✗ 번아웃 초과'}")
     print("-" * 76)
     valid = [r for r in rows if r["valid"]]
-    print(f" 4제약 동시 만족: {len(valid)}/{len(passed)}개 (전체 {len(stage1)}개 중)")
+    print(f" 5제약 동시 만족: {len(valid)}/{len(passed)}개 (전체 {len(stage1)}개 중)")
     if valid:
-        best = min(valid, key=lambda r: abs(r["chain"] - CHAIN_TARGET))
+        # 제약 경계에 밀착한 후보는 시행 수만 바꿔도 넘어간다 — C/A 여유를 요구한다.
+        roomy = [r for r in valid if r["ratio_c"] <= CA_HI - CA_MARGIN]
+        if not roomy:
+            print(f" ※ C/A 여유({CA_MARGIN}) 있는 후보 없음 → 경계 밀착 후보에서 선정")
+            roomy = valid
+        best = min(roomy, key=lambda r: abs(r["chain"] - CHAIN_TARGET))
         print(f" 권장안: scale={best['scale']:.0f} r2u={best['rift_to_unit']:.1f} "
-              f"gold={best['gold']:.0f} → B/A {best['ratio']:.3f}, 연쇄 {best['chain']*100:.1f}%, "
+              f"gold={best['gold']:.0f} → B/A {best['ratio']:.3f}, C/A {best['ratio_c']:.3f}, "
+              f"연쇄 {best['chain']*100:.1f}%, "
               f"2층 {best['l2']*100:.1f}%, 번아웃증분 {best['delta_loss']*100:+.1f}%p")
     else:
         cheapest = min(rows, key=lambda r: r["delta_loss"])
-        print(" → 4제약 동시 만족 불가. 연쇄 8~12%를 만들려면 chain_scale을 크게 올려야 하고,")
+        print(" → 5제약 동시 만족 불가. 연쇄 8~12%를 만들려면 chain_scale을 크게 올려야 하고,")
         print(f"   그 자체가 B형 번아웃을 키운다(최소 증분 {cheapest['delta_loss']*100:+.1f}%p "
               f"@ scale={cheapest['scale']:.0f}).")
         print("   → 연쇄 보상을 '상시 배율'이 아닌 '완주 단발 보너스'로 옮기는 재설계가 필요.")
@@ -1842,7 +1876,7 @@ def _tune_param_to_chain(
     best = (hi, 0.0, 0.0, 0.0)
     for _ in range(iters):
         mid = (lo + hi) / 2.0
-        ratio, chain, l2 = _metrics_3(make_cfg(mid), days, trials, seed0)
+        ratio, chain, l2, _ = _balance_metrics(make_cfg(mid), days, trials, seed0)
         best = (mid, ratio, chain, l2)
         if chain < target:
             lo = mid
@@ -2015,15 +2049,22 @@ def diagnose_d_chain_exposure(
     """
     print("\n" + BAR)
     print(f" D_쇼츠유입 연쇄 노출 진단 | {days}일 × {trials}회 | "
-          f"연쇄 창 = {cfg.chain_window_h}h")
+          f"연쇄 창 = {cfg.chain_window_h}h "
+          f"(온보딩 예외 {cfg.onboarding_chain_window_h or 0:.1f}h)")
     print(BAR)
 
     # 현행 설계와 C안(완주보너스 비례 지급) 재설계를 나란히 비교한다.
+    # C안(비례보너스)·D안(온보딩 연쇄창)이 모두 기본 Config에 확정되었으므로
+    # 대조군은 그것들을 끈 쪽이다. 순서 고정: [0]=대조, [1]=C안만, [2]=현행(둘 다).
+    # 아래 구조 진단이 rows[0]을 '예외가 없을 때의 D형'으로 읽고,
+    # c_rows = rows[n:2n]이 C안 단독을 가리킨다.
+    off = replace(cfg, chain_bonus_graded=False, chain_complete_bonus=120.0,
+                  onboarding_chain_window_h=0.0)
     designs = {
-        "현행 설계": cfg,
-        "C안 재설계(비례보너스)": replace(cfg, chain_bonus_graded=True,
-                                          chain_complete_bonus=314.0),
-        "D안 온보딩 연쇄창 예외(3.5h)": replace(cfg, onboarding_chain_window_h=3.5),
+        "대조: 확정 전(C안·D안 없음)": off,
+        "C안만(비례보너스)": replace(off, chain_bonus_graded=True,
+                                     chain_complete_bonus=cfg.chain_complete_bonus),
+        f"현행 확정(C안 + D안 {cfg.onboarding_chain_window_h:.1f}h)": cfg,
     }
 
     rows: List[Dict[str, object]] = []
@@ -2054,7 +2095,10 @@ def diagnose_d_chain_exposure(
                    "units": m_us, "d7_vs_b": m_d7}
             sub.append(rec)
             rows.append(rec)
-            mark = "★" if min_gap <= cfg.chain_window_h else " "
+            # 표식 기준은 그 설계에서 실제로 적용되는 창이다 (D형은 온보딩 코호트라
+            # 예외가 켜져 있으면 넓은 창이 적용된다).
+            win = dcfg.onboarding_chain_window_h or dcfg.chain_window_h
+            mark = "★" if min_gap <= win else " "
             print(f"{label:<22}{min_gap:>8.2f}h{m_ev:>9.2f}{m_sh*100:>8.1f}%"
                   f"{m_d7*100:>13.1f}%{m_us:>12,.0f}{mark}")
         cur, best = sub[0], max(sub, key=lambda r: r["units"])
@@ -2065,7 +2109,7 @@ def diagnose_d_chain_exposure(
 
     print("-" * 76)
     cur0 = rows[0]
-    print(f" 구조 진단: 현행 D형 최소간격 {cur0['min_gap']:.2f}h > 연쇄 창 "
+    print(f" 구조 진단: 예외 OFF일 때 D형 최소간격 {cur0['min_gap']:.2f}h > 연쇄 창 "
           f"{cfg.chain_window_h}h → 연쇄 {cur0['chain_per_day']:.2f}회/일(구조적 0).")
     print(" 핵심 모순: 스택은 55분마다 최대 3개까지 쌓여 '분산'이 수급에 유리하고,")
     print("   연쇄는 1.5h 이내 재수령이라 '밀집'이 유리하다. 두 층이 정반대 행동을 요구한다.")
@@ -2082,14 +2126,14 @@ def diagnose_d_chain_exposure(
         print(" C안 재설계로도 분산이 우세 → 모순은 보상 크기가 아니라 구조에서 온다.")
         print(f"   스택 만충에 {cfg.stack_cap * cfg.stack_interval_h:.2f}h가 필요한데 "
               f"연쇄 창은 {cfg.chain_window_h:.2f}h로 더 좁아 애초에 양립 불가다.")
-    d_rows = [r for r in rows if r["design"].startswith("D안")]
+    d_rows = [r for r in rows if r["design"].startswith("현행 확정")]
     if d_rows:
         # 권장안은 '연쇄를 경험하면서 성장이 최대'인 스케줄 (연쇄 횟수만 보면
         # 성장이 낮은 밀집안이 뽑혀 잘못된 권고가 된다).
         cand = [r for r in d_rows if r["chain_per_day"] > 0.0] or d_rows
         rec = max(cand, key=lambda r: r["units"])
         cur_d = d_rows[0]
-        print(f" D안 해법: 온보딩 한정으로 연쇄 창을 넓히면 '{rec['label']}'에서")
+        print(f" 확정안 효과: 온보딩 한정으로 연쇄 창을 넓히면 '{rec['label']}'에서")
         print(f"   연쇄 {rec['chain_per_day']:.2f}회/일 + 성장 {rec['units']:,.0f} "
               f"({rec['units']/max(1e-9,cur_d['units'])-1:+.1%} vs 현행) + "
               f"D7 진도 {rec['d7_vs_b']*100:.1f}%")
@@ -2145,7 +2189,7 @@ def verify_integrated_candidate(
     rows: List[Dict[str, object]] = []
     for label, kw in variants.items():
         c = replace(cfg, **kw) if kw else cfg
-        ratio, chain, l2 = _metrics_3(c, days, trials, seed0)
+        ratio, chain, l2, _ = _balance_metrics(c, days, trials, seed0)
         cb = replace(c, burnout_sensitivity=sensitivity, burnout_ref_mode="relative")
         loss = _burnout_active_loss(cb, None, burn_days, burn_trials, seed0,
                                     persona="B_타깃")
@@ -2308,19 +2352,20 @@ def diagnose_stack_cap_usage(
 #   · stack_cap 3→5 : C안이 유발한 C/A 상승(1.96→2.39)을 되돌리는 헤비 제동.
 #     상한 상향은 헤비(+6%)보다 저·중빈도(+21~22%)에 훨씬 이롭기 때문이다.
 #   · gold_per_hour 100→130 : stack_cap 상향으로 부푼 2층 비중을 권장대로 복원.
-RECOMMENDED_OVERRIDES: Dict[str, object] = {
-    "stack_cap": 5,
-    "chain_bonus_graded": True,
-    "chain_complete_bonus": 440.0,
-    "gold_per_hour": 130.0,
-    # 만충 시간(stack_cap x interval = 4.58h)에 맞춰 설정. 이보다 좁으면 온보딩
-    # 예외로도 모순이 남는다(불변식 검사가 잡아낸다).
-    "onboarding_chain_window_h": 4.6,
+# 권장안이 기본 Config에 확정되었으므로, 비교 기준선은 이제 '확정 전 설계'다.
+# 아래는 확정 전 값 — 되돌려 재보면 확정이 무엇을 바꿨는지 그대로 재현된다.
+PRE_FINALIZE_OVERRIDES: Dict[str, object] = {
+    "stack_cap": 3,
+    "chain_bonus_graded": False,
+    "chain_complete_bonus": 120.0,
+    "gold_per_hour": 100.0,
+    "onboarding_chain_window_h": 0.0,
 }
 
 
-def recommended_config(cfg: Optional[Config] = None) -> Config:
-    return replace(cfg or Config(), **RECOMMENDED_OVERRIDES)
+def legacy_config(cfg: Optional[Config] = None) -> Config:
+    """확정 전 설계로 되돌린 Config (회귀 비교용)."""
+    return replace(cfg or Config(), **PRE_FINALIZE_OVERRIDES)
 
 
 def verify_recommended(
@@ -2328,20 +2373,20 @@ def verify_recommended(
     days: int = 30, trials: int = 80, burn_days: int = 60, burn_trials: int = 100,
     seed0: int = 1,
 ) -> Dict[str, object]:
-    """권장안을 5개 제약으로 최종 검증하고 현행과 나란히 비교한다."""
-    cur = cfg or Config()
-    rec = recommended_config(cur)
+    """확정안이 5개 제약을 지키는지 검증하고 확정 전 설계와 나란히 비교한다."""
+    rec = cfg or Config()          # 현행 = 확정안
+    cur = legacy_config(rec)       # 기준선 = 확정 전
 
     print("\n" + BAR)
-    print(f" 최종 권장안 검증 | 밸런스 {days}일×{trials}회 / 번아웃 {burn_days}일×{burn_trials}회")
+    print(f" 확정안 회귀 검증 | 밸런스 {days}일×{trials}회 / 번아웃 {burn_days}일×{burn_trials}회")
     print(BAR)
-    print(" 변경점: " + ", ".join(f"{k}={v}" for k, v in RECOMMENDED_OVERRIDES.items()))
+    print(" 확정된 값: " + ", ".join(f"{k}={getattr(rec, k)}" for k in PRE_FINALIZE_OVERRIDES))
     warns = validate_config(rec, verbose=False)
     print(f" 설계 불변식: {'✓ 통과' if not warns else '⚠ ' + warns[0][:60]}")
     print("-" * 76)
 
     def measure(c: Config) -> Dict[str, float]:
-        ratio, chain, l2 = _metrics_3(c, days, trials, seed0)
+        ratio, chain, l2, _ = _balance_metrics(c, days, trials, seed0)
         cu = statistics.fmean([growth_units(simulate(c, "C_헤비", days, seed0 + k * 7919), c)
                                for k in range(max(40, trials // 2))])
         au = statistics.fmean([growth_units(simulate(c, "A_저빈도", days, seed0 + k * 7919), c)
@@ -2373,7 +2418,7 @@ def verify_recommended(
         ("C/A 비율", m_cur["ca"], m_rec["ca"], 0.0, 2.20, "{:.3f}"),
         ("번아웃 증분", 0.0, delta, -1.0, BURNOUT_SAFE_LOSS, "{:+.1%}"),
     ]
-    print(f"{'제약':<12}{'현행':>12}{'권장안':>12}{'허용 구간':>20}{'판정':>8}")
+    print(f"{'제약':<12}{'확정 전':>12}{'현행':>12}{'허용 구간':>20}{'판정':>8}")
     print("-" * 76)
     all_ok = True
     for name, v0, v1, lo, hi, fmt in checks:
