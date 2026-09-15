@@ -83,6 +83,22 @@
   .aura{animation:breathe 3.4s ease-in-out infinite;transform-origin:center}
   @keyframes breathe{0%,100%{opacity:.22}50%{opacity:.52}}
 
+  .timing{width:100%}
+  .tbar{
+    position:relative;height:26px;width:100%;
+    border:2px solid #1A0F33;border-radius:8px;background:#1B1038;overflow:hidden;
+  }
+  .tbar .zone{position:absolute;top:0;bottom:0;display:block}
+  .tbar .zone.good{left:35%;width:30%;background:rgba(76,196,76,.28)}
+  .tbar .zone.perfect{left:45%;width:10%;background:rgba(255,200,61,.5)}
+  .tbar .marker{
+    position:absolute;top:-2px;bottom:-2px;width:5px;margin-left:-2.5px;
+    background:var(--ink);border-radius:3px;box-shadow:0 0 8px rgba(255,246,224,.7);
+  }
+  .thint{text-align:center;font-size:12px;color:var(--ink-3);margin-top:4px;min-height:18px}
+  .thint b{font-weight:400}
+  .thint b.p{color:var(--gold)} .thint b.g{color:var(--go)} .thint b.m{color:var(--ink-3)}
+
   .dps{display:flex;gap:8px;width:100%}
   .dps div{
     flex:1;background:var(--raise);border:2px solid var(--edge);border-radius:8px;
@@ -131,7 +147,7 @@
   .purse .g .v{color:var(--gold)} .purse .r .v{color:var(--rift)} .purse .l .v{color:var(--relic)}
 
   .tabs{
-    display:grid;grid-template-columns:repeat(5,1fr);
+    display:grid;grid-template-columns:repeat(4,1fr);
     border-top:2px solid var(--gold-d);background:var(--raise);
     padding-bottom:env(safe-area-inset-bottom,0px);
   }
@@ -306,8 +322,17 @@
       </svg>
     </button>
 
+    <div class="timing">
+      <div class="tbar">
+        <span class="zone good"></span>
+        <span class="zone perfect"></span>
+        <i class="marker" id="marker" style="left:0%"></i>
+      </div>
+      <div class="thint" id="thint">마커가 가운데 올 때 눌러라</div>
+    </div>
+
     <div class="dps">
-      <div class="tap"><div class="k">탭 데미지</div><div class="v stat" id="tapDmg">1</div></div>
+      <div class="tap"><div class="k">퍼펙트 일격</div><div class="v stat" id="tapDmg">1</div></div>
       <div class="auto"><div class="k">영웅 DPS</div><div class="v stat" id="autoDps">0</div></div>
     </div>
     <button type="button" class="buy" id="tapBuy">
@@ -381,12 +406,17 @@
       <button type="button" class="big-btn" id="prestige" style="margin-top:10px">승급 — 스테이지 1부터 다시</button>
       <div class="note" id="prNote">유물이 늘수록 배율이 오른다. 벽에 막히면 승급할 때다.</div>
     </div>
+
+    <h3>기록</h3>
+    <ul class="log" id="log"></ul>
+    <button type="button" class="ghost" id="resetBtn">기록 지우고 처음부터</button>
   </section>
 
   <!-- 탭 5: 계측 -->
+  <!-- 플레이에는 필요 없다. ?debug=1 로 열었을 때만 탭이 나타난다. -->
   <section class="sheet" id="viewGauge" role="tabpanel" aria-labelledby="tabGauge" hidden>
     <h2>계측</h2>
-    <p class="lead">tt3_sim.py가 검증한 2층 경제가 실제 플레이에서 어떻게 나오는지 본다.</p>
+    <p class="lead">설계 검증용 화면이다. tt3_sim.py가 검증한 2층 경제가 실제 플레이에서 어떻게 나오는지 본다.</p>
     <div class="card">
       <div class="kv"><span class="k">성장 단위</span><span class="v" id="mGrowth">0</span></div>
       <div class="kv"><span class="k">1층 누적 골드</span><span class="v gold" id="mGold">0</span></div>
@@ -404,9 +434,6 @@
       <div class="kv" style="margin-top:8px"><span class="k">실측 골드/시간</span><span class="v gold" id="mGph">—</span></div>
       <div class="kv"><span class="k">모델 가정</span><span class="v" id="mGphModel">130</span></div>
     </div>
-    <h3>기록</h3>
-    <ul class="log" id="log"></ul>
-    <button type="button" class="ghost" id="resetBtn">기록 지우고 처음부터</button>
   </section>
 
   <div class="purse">
@@ -420,7 +447,7 @@
     <button type="button" role="tab" id="tabHero"  aria-selected="false" aria-controls="viewHero"><span class="ic">🛡</span>영웅</button>
     <button type="button" role="tab" id="tabRift"  aria-selected="false" aria-controls="viewRift"><span class="ic">◈</span>균열<span class="dot" id="riftDot" hidden></span></button>
     <button type="button" role="tab" id="tabRelic" aria-selected="false" aria-controls="viewRelic"><span class="ic">◆</span>유물</button>
-    <button type="button" role="tab" id="tabGauge" aria-selected="false" aria-controls="viewGauge"><span class="ic">◉</span>계측</button>
+    <button type="button" role="tab" id="tabGauge" aria-selected="false" aria-controls="viewGauge" hidden><span class="ic">◉</span>계측</button>
   </nav>
 </div>
 
@@ -490,7 +517,24 @@ const CFG = {
 };
 
 const START_T = 8.0;
-const SAVE_KEY = "tt3.titan.v4";
+const SAVE_KEY = "tt3.titan.v5";
+
+/* 연타 대신 타이밍. 사람이 연타로 낼 수 있는 건 초당 5회 남짓인데, 마커가
+   0.8초마다 중앙을 지나므로 Perfect를 계속 맞히면 초당 12.5배 — 연타의 2.5배다.
+   빗나가면 1배로 떨어지니 막 누르는 쪽이 손해가 된다.
+   halfPeriod를 매 타격마다 흔들어, 고정 간격 매크로가 계속 맞히지 못하게 한다. */
+const TIMING = {
+  perfectBand: 0.05, goodBand: 0.15,
+  perfectMult: 10, goodMult: 6, missMult: 1,
+  halfMin: 0.70, halfMax: 1.00,
+};
+let mk = { pos: 0, dir: 1, half: 0.85 };
+function judge(pos) {
+  const d = Math.abs(pos - 0.5);
+  if (d <= TIMING.perfectBand) return { n: "PERFECT", mult: TIMING.perfectMult, cls: "p" };
+  if (d <= TIMING.goodBand)    return { n: "GOOD",    mult: TIMING.goodMult,    cls: "g" };
+  return { n: "MISS", mult: TIMING.missMult, cls: "m" };
+}
 
 /* ── 순수 함수 ────────────────────────────────────────────────────── */
 const foeHP    = (s) => F.hpBase * Math.pow(F.hpGrowth, s - 1);
@@ -557,10 +601,21 @@ function damage(amount, evt, crit) {
   if (evt) pop(evt, "-" + fmt(amount), crit ? "crit" : "");
   if (S.hp <= 0) killReward(evt);
 }
+let hintTimer = 0;
 function onTap(evt) {
   const z = document.getElementById("tapzone");
   z.classList.remove("hit"); void z.offsetWidth; z.classList.add("hit");
-  damage(tapDamage(), evt, true);
+
+  const j = judge(mk.pos);
+  damage(tapDamage() * j.mult, evt, j.cls === "p");
+
+  const hint = document.getElementById("thint");
+  hint.innerHTML = `<b class="${j.cls}">${j.n}</b> ×${j.mult}`;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { hint.textContent = "마커가 가운데 올 때 눌러라"; }, 900);
+
+  // 주기를 매번 흔들어 고정 간격 매크로를 막는다
+  mk.half = TIMING.halfMin + Math.random() * (TIMING.halfMax - TIMING.halfMin);
   render();
 }
 // 보스 제한시간을 넘기면 도망친다 — 스테이지는 그대로, 일반 몹부터 다시.
@@ -803,7 +858,7 @@ function render() {
   tz.style.setProperty("--foe-horn", boss ? "#C0453F" : "#6B4FA8");
   tz.style.setProperty("--foe-aura", boss ? "#8C1A16" : "#1D8C81");
 
-  document.getElementById("tapDmg").textContent = fmt(tapDamage());
+  document.getElementById("tapDmg").textContent = fmt(tapDamage() * TIMING.perfectMult);
   document.getElementById("autoDps").textContent = fmt(autoDps());
   const tc = tapCost(S.tapLv);
   document.getElementById("tapLv").textContent = "Lv " + S.tapLv;
@@ -986,7 +1041,18 @@ function frame(ts) {
   if (!lastFrame) lastFrame = ts;
   const dt = Math.min((ts - lastFrame) / 1000, 1.0);
   lastFrame = ts;
-  if (!paused) { advance(S.t + dt * speed); render(); }
+  if (!paused) {
+    // 마커는 게임 배속이 아니라 실제 시간으로 움직인다 — 배속에 따라
+    // 빨라지면 사람이 맞힐 수 없는 판정이 된다.
+    mk.pos += (dt / mk.half) * mk.dir;
+    if (mk.pos >= 1) { mk.pos = 1; mk.dir = -1; }
+    else if (mk.pos <= 0) { mk.pos = 0; mk.dir = 1; }
+    const m = document.getElementById("marker");
+    if (m) m.style.left = (mk.pos * 100).toFixed(2) + "%";
+
+    advance(S.t + dt * speed);
+    render();
+  }
   requestAnimationFrame(frame);
 }
 
@@ -1018,6 +1084,18 @@ function selfCheck() {
   t("스테이지가 오를수록 적이 강해진다", foeHP(2) > foeHP(1));
   t("보스는 제한시간이 있다", F.bossSeconds > 0);
 
+  // 타이밍 — 연타보다 정확한 한 방이 이득이어야 한다
+  t("퍼펙트가 굿보다, 굿이 미스보다 세다",
+    TIMING.perfectMult > TIMING.goodMult && TIMING.goodMult > TIMING.missMult);
+  t("퍼펙트 구간이 굿 구간 안에 있다", TIMING.perfectBand < TIMING.goodBand);
+  t("중앙이 퍼펙트", judge(0.5).cls === "p" && judge(0.0).cls === "m" && judge(1.0).cls === "m");
+  t("경계 바로 밖은 한 등급 아래",
+    judge(0.5 + TIMING.perfectBand + 1e-6).cls === "g" &&
+    judge(0.5 + TIMING.goodBand + 1e-6).cls === "m");
+  t("퍼펙트 연타가 손연타보다 이득",
+    TIMING.perfectMult / TIMING.halfMax > 5);
+  t("주기가 흔들려 고정 간격 매크로를 막는다", TIMING.halfMax > TIMING.halfMin);
+
   if (fails.length) console.error("[균열의 티탄] 점검 실패:", fails);
   else console.info(`[균열의 티탄] 경제 점검 ${ran}항목 통과 — 2층은 tt3_sim.py 확정값과 일치`);
 }
@@ -1031,8 +1109,13 @@ function showTab(id) {
     document.getElementById(view).hidden = !on;
   }
 }
+const DEBUG = new URLSearchParams(location.search).has("debug");
 function start() {
   selfCheck();
+  if (DEBUG) {
+    document.getElementById("tabGauge").hidden = false;
+    document.querySelector(".tabs").style.gridTemplateColumns = "repeat(5,1fr)";
+  }
   if (!load()) {
     S = freshState(); spawn();
     logLine("균열이 열렸다. 타이탄을 두드려라.");
