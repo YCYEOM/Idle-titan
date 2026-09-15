@@ -3,77 +3,49 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Do+Hyeon&display=swap">
 <style>
-  /* ── 단일 세계관에 커밋한 다크 테마. 밤의 균열 앞에 서 있는 화면이라
-       라이트 변형을 두지 않고, 모든 색을 명시적으로 칠한다. ────────── */
+  /* 단일 세계관에 커밋한 다크 테마 — 밤의 균열 앞이라 라이트 변형을 두지 않고
+     모든 색을 명시적으로 칠한다. */
   :root {
-    --deep:   #120B26;
-    --mid:    #241546;
-    --raise:  #33205F;
-    --raise2: #402A73;
-    --edge:   #55399B;
-    --gold:   #FFC83D;
-    --gold-d: #C08A12;
-    --rift:   #4FE3D0;
-    --rift-d: #1D8C81;
-    --hp:     #E0342E;
-    --hp-d:   #8C1A16;
-    --combo:  #FF8A3D;
-    --go:     #4CC44C;
-    --go-d:   #2C7A2C;
-    --ink:    #FFF6E0;
-    --ink-2:  #C2B6E8;
-    --ink-3:  #8878B8;
+    --deep:#120B26; --mid:#241546; --raise:#33205F; --raise2:#402A73; --edge:#55399B;
+    --gold:#FFC83D; --gold-d:#C08A12;
+    --rift:#4FE3D0; --rift-d:#1D8C81;
+    --hp:#E0342E; --hp-d:#8C1A16;
+    --combo:#FF8A3D; --go:#4CC44C; --go-d:#2C7A2C;
+    --relic:#D9C7FF; --relic-d:#6B4FA8;
+    --ink:#FFF6E0; --ink-2:#C2B6E8; --ink-3:#8878B8;
     --stroke: 0 2px 0 #1A0F33, 0 -1px 0 #1A0F33, 1px 0 0 #1A0F33, -1px 0 0 #1A0F33;
   }
-
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
-    margin: 0;
-    background: var(--deep);
-    color: var(--ink);
+    margin: 0; background: var(--deep); color: var(--ink);
     font: 400 15px/1.45 "Do Hyeon", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-    -webkit-font-smoothing: antialiased;
-    overflow: hidden;
+    -webkit-font-smoothing: antialiased; overflow: hidden;
   }
   .stat { font-family: "Black Han Sans", "Do Hyeon", sans-serif; font-variant-numeric: tabular-nums; }
 
-  /* ── 세로 게임 화면. 넓은 창에서도 휴대폰 비율을 유지한다 ────────── */
   .app {
-    height: 100%;
-    max-width: 480px;
-    margin: 0 auto;
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    height: 100%; max-width: 480px; margin: 0 auto;
+    display: grid; grid-template-rows: auto minmax(0,1fr) auto auto;
     background:
-      radial-gradient(120% 60% at 50% 12%, var(--raise) 0%, transparent 60%),
-      linear-gradient(180deg, var(--mid) 0%, var(--deep) 62%);
-    border-left: 1px solid var(--edge);
-    border-right: 1px solid var(--edge);
-    position: relative;
+      radial-gradient(130% 55% at 50% 10%, var(--raise) 0%, transparent 62%),
+      linear-gradient(180deg, var(--mid) 0%, var(--deep) 64%);
+    border-left: 1px solid var(--edge); border-right: 1px solid var(--edge);
   }
 
-  /* ── 상단: 스테이지 + 균열 안정도(보스 HP 자리) ─────────────────── */
+  /* ── HUD: 현재 스테이지가 주인공. 회차 동안 한계까지 밀려 올라간다 ── */
   .hud {
-    padding: 10px 14px 12px;
-    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    padding: 10px 14px 12px; padding-top: calc(10px + env(safe-area-inset-top, 0px));
     border-bottom: 1px solid var(--edge);
-    background: linear-gradient(180deg, rgba(0,0,0,.28), transparent);
+    background: linear-gradient(180deg, rgba(0,0,0,.3), transparent);
   }
-  .hud-top { display: flex; align-items: center; gap: 10px; }
+  .hud-top { display: flex; align-items: flex-end; gap: 10px; }
   .stage { flex: 1; min-width: 0; }
-  .stage .lbl {
-    font-size: 11px; letter-spacing: .14em; color: var(--ink-3);
-  }
-  .stage .val {
-    font-size: 28px; line-height: 1.05; color: var(--gold);
-    text-shadow: var(--stroke);
-  }
-  .clock { text-align: right; line-height: 1.2; }
-  .clock .d { font-size: 11px; color: var(--ink-3); letter-spacing: .1em; }
-  .clock .t { font-size: 17px; color: var(--ink-2); }
-
-  .speed { display: flex; border: 2px solid var(--gold-d); border-radius: 6px; overflow: hidden; }
+  .stage .lbl { font-size: 11px; letter-spacing: .14em; color: var(--ink-3); }
+  .stage .val { font-size: 34px; line-height: 1; color: var(--gold); text-shadow: var(--stroke); }
+  .stage .cap { font-size: 12px; color: var(--ink-3); margin-top: 3px; }
+  .stage .cap b { color: var(--ink-2); font-weight: 400; }
+  .speed { display: flex; border: 2px solid var(--gold-d); border-radius: 6px; overflow: hidden; flex: none; }
   .speed button {
     appearance: none; border: 0; border-right: 1px solid var(--gold-d);
     background: var(--raise); color: var(--ink-2);
@@ -83,259 +55,200 @@
   .speed button[aria-pressed="true"] { background: var(--gold); color: #2A1B04; }
   .speed button:focus-visible { outline: 2px solid var(--rift); outline-offset: -2px; }
 
-  .bar-wrap { margin-top: 10px; }
-  .bar-head {
-    display: flex; justify-content: space-between; align-items: baseline;
-    font-size: 12px; color: var(--ink-3); margin-bottom: 4px;
-  }
-  .bar-head b { color: var(--ink-2); font-weight: 400; }
-  .bar {
-    height: 16px; border: 2px solid #1A0F33; border-radius: 9px;
-    background: var(--hp-d); overflow: hidden; position: relative;
-  }
-  .bar i {
-    display: block; height: 100%;
-    background: linear-gradient(180deg, #FF6B5E, var(--hp));
-    transition: width .2s linear;
-  }
-  .bar.full i { background: linear-gradient(180deg, #7BFFEC, var(--rift)); }
-  .bar span {
-    position: absolute; inset: 0; display: grid; place-items: center;
-    font-size: 11px; color: #FFF; text-shadow: var(--stroke);
-  }
+  /* 회차 진행 = 스테이지가 한계로 수렴하는 곡선. 끝까지 차면 승급 준비. */
+  .runbar { margin-top: 9px; }
+  .runbar .head { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+  .runbar .head b { color: var(--ink-2); font-weight: 400; }
+  .track { height: 9px; border: 2px solid #1A0F33; border-radius: 6px; background: #1B1038; overflow: hidden; }
+  .track i { display: block; height: 100%; background: linear-gradient(180deg, #FFE08A, var(--gold)); transition: width .2s linear; }
+  .track.ready i { background: linear-gradient(180deg, #E6D0FF, var(--relic-d)); }
 
-  /* ── 중앙: 균열 본체. 여기를 누르면 수령한다 ────────────────────── */
+  /* ── 전장 ─────────────────────────────────────────────────────── */
   .arena {
-    position: relative; min-height: 0;
+    position: relative; min-height: 0; overflow: hidden;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; padding: 12px 14px;
-    overflow: hidden;
+    gap: 10px; padding: 10px 14px;
   }
-  .rift-btn {
+  .titan-name { text-align: center; }
+  .titan-name .n { font-size: 19px; color: var(--ink); text-shadow: var(--stroke); }
+  .titan-name .r { font-size: 12px; color: var(--ink-3); }
+
+  .titan-btn {
     appearance: none; border: 0; background: none; padding: 0; cursor: pointer;
-    width: min(56vw, 210px); aspect-ratio: 1; position: relative;
-    display: grid; place-items: center;
+    width: min(50vw, 190px); position: relative; display: block;
   }
-  .rift-btn:disabled { cursor: default; }
-  .rift-core {
-    position: absolute; inset: 0; border-radius: 50%;
-    background:
-      radial-gradient(circle at 50% 50%, #BFFFF4 0%, var(--rift) 22%, var(--rift-d) 48%, transparent 72%);
-    filter: blur(1px);
-    animation: pulse 3.2s ease-in-out infinite;
+  .titan-btn:disabled { cursor: default; }
+  .titan-btn svg { width: 100%; height: auto; display: block; filter: drop-shadow(0 6px 16px rgba(79,227,208,.35)); }
+  .titan-btn:disabled svg { filter: none; opacity: .34; }
+  .titan-btn:active:not(:disabled) svg { transform: translateY(2px) scale(.98); }
+  .titan-btn:focus-visible { outline: 3px solid var(--gold); outline-offset: 6px; border-radius: 12px; }
+  .titan-btn.hit svg { animation: shake .26s ease; }
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    22% { transform: translateX(-7px) rotate(-2deg); }
+    58% { transform: translateX(6px) rotate(2deg); }
   }
-  .rift-btn:disabled .rift-core { opacity: .28; animation: none; }
-  .rift-rays {
-    position: absolute; inset: -6%; border-radius: 50%;
-    background: conic-gradient(from 0deg,
-      transparent 0deg, rgba(79,227,208,.34) 14deg, transparent 30deg,
-      transparent 90deg, rgba(79,227,208,.34) 104deg, transparent 120deg,
-      transparent 180deg, rgba(79,227,208,.34) 194deg, transparent 210deg,
-      transparent 270deg, rgba(79,227,208,.34) 284deg, transparent 300deg);
-    animation: spin 18s linear infinite;
-  }
-  .rift-btn:disabled .rift-rays { opacity: .18; animation: none; }
-  .rift-face { position: relative; text-align: center; }
-  .rift-face .amount {
-    font-size: 40px; line-height: 1; color: #04201C;
-    text-shadow: 0 2px 0 rgba(255,255,255,.45);
-  }
-  .rift-face .unit { font-size: 13px; color: #06322C; margin-top: 2px; }
-  .rift-btn:disabled .rift-face .amount,
-  .rift-btn:disabled .rift-face .unit { color: var(--ink-3); text-shadow: none; }
-  .rift-btn:active:not(:disabled) { transform: scale(.97); }
-  .rift-btn:focus-visible { outline: 3px solid var(--gold); outline-offset: 6px; border-radius: 50%; }
+  .aura { animation: breathe 3.4s ease-in-out infinite; transform-origin: center; }
+  @keyframes breathe { 0%,100% { opacity: .25; } 50% { opacity: .6; } }
 
-  @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.045); } }
-  @keyframes spin  { to { transform: rotate(360deg); } }
+  /* 응결 게이지 — 타이탄이 굵어질수록 전리품이 커진다 */
+  .cond { width: min(72vw, 260px); }
+  .cond .head { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); margin-bottom: 3px; }
+  .cond .bar { height: 15px; border: 2px solid #1A0F33; border-radius: 8px; background: var(--hp-d); overflow: hidden; position: relative; }
+  .cond .bar i { display: block; height: 100%; background: linear-gradient(180deg, #7BFFEC, var(--rift)); transition: width .2s linear; }
+  .cond .bar span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: #04201C; text-shadow: 0 1px 0 rgba(255,255,255,.35); }
 
-  /* 스택 오브: 하나하나가 자기 나이를 들고 있어 신선도가 칸별로 다르다 */
-  .orbs { display: flex; gap: 7px; justify-content: center; flex-wrap: wrap; }
-  .orb {
-    width: 40px; text-align: center;
-  }
+  .orbs { display: flex; gap: 6px; justify-content: center; }
+  .orb { width: 38px; text-align: center; }
   .orb .dot {
-    width: 30px; height: 30px; margin: 0 auto; border-radius: 50%;
+    width: 28px; height: 28px; margin: 0 auto; border-radius: 50%;
     border: 2px solid var(--edge); background: #1B1038;
-    display: grid; place-items: center;
-    font-size: 11px; color: var(--ink-3);
+    display: grid; place-items: center; font-size: 11px; color: var(--ink-3);
   }
   .orb.on .dot {
-    border-color: var(--rift);
+    border-color: var(--rift); color: #04201C;
     background: radial-gradient(circle at 38% 32%, #BFFFF4, var(--rift-d));
-    color: #04201C;
-    box-shadow: 0 0 10px rgba(79,227,208,.5);
+    box-shadow: 0 0 9px rgba(79,227,208,.5);
   }
   .orb .f { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
   .orb.on .f { color: var(--rift); }
 
-  /* 연쇄 콤보 */
-  .combo { text-align: center; min-height: 52px; }
-  .combo .n {
-    font-size: 30px; line-height: 1; color: var(--combo); text-shadow: var(--stroke);
-  }
-  .combo .n.idle { color: var(--ink-3); font-size: 18px; }
-  .combo .w { font-size: 12px; color: var(--ink-3); margin-top: 3px; }
-  .combo-bar {
-    width: 160px; height: 6px; margin: 5px auto 0;
-    border: 1px solid #1A0F33; border-radius: 4px; background: #1B1038; overflow: hidden;
-  }
+  .combo { text-align: center; min-height: 44px; }
+  .combo .n { font-size: 25px; line-height: 1.1; color: var(--combo); text-shadow: var(--stroke); }
+  .combo .n.idle { color: var(--ink-3); font-size: 16px; }
+  .combo .w { font-size: 11px; color: var(--ink-3); }
+  .combo-bar { width: 150px; height: 5px; margin: 4px auto 0; border: 1px solid #1A0F33; border-radius: 4px; background: #1B1038; overflow: hidden; }
   .combo-bar i { display: block; height: 100%; background: var(--combo); transition: width .2s linear; }
 
-  /* 떠오르는 획득 수치 */
   .pop {
     position: absolute; pointer-events: none; z-index: 5;
     font-family: "Black Han Sans", sans-serif; font-size: 26px;
-    color: var(--rift); text-shadow: var(--stroke);
-    animation: rise 1s ease-out forwards;
+    color: var(--rift); text-shadow: var(--stroke); animation: rise 1s ease-out forwards;
   }
-  .pop.crit { color: var(--combo); font-size: 32px; }
+  .pop.crit { color: var(--combo); font-size: 33px; }
   @keyframes rise {
-    0%   { opacity: 0; transform: translate(-50%, 0) scale(.8); }
-    18%  { opacity: 1; transform: translate(-50%, -14px) scale(1.1); }
-    100% { opacity: 0; transform: translate(-50%, -78px) scale(1); }
+    0% { opacity: 0; transform: translate(-50%,0) scale(.8); }
+    18% { opacity: 1; transform: translate(-50%,-14px) scale(1.12); }
+    100% { opacity: 0; transform: translate(-50%,-84px) scale(1); }
   }
+  .toast {
+    position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+    background: var(--relic-d); border: 2px solid var(--relic); border-radius: 8px;
+    padding: 8px 14px; font-size: 14px; color: #fff; z-index: 6;
+    animation: fade 2.4s ease forwards;
+  }
+  @keyframes fade { 0%{opacity:0;transform:translate(-50%,-8px);} 12%,72%{opacity:1;transform:translate(-50%,0);} 100%{opacity:0;} }
 
-  /* ── 재화 바 ──────────────────────────────────────────────────── */
-  .purse {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
-    background: var(--edge);
-    border-top: 1px solid var(--edge);
-  }
-  .purse div { background: var(--mid); padding: 8px 10px; text-align: center; }
+  /* ── 재화 · 탭 ────────────────────────────────────────────────── */
+  .purse { display: grid; grid-template-columns: repeat(3,1fr); gap: 1px; background: var(--edge); border-top: 1px solid var(--edge); }
+  .purse div { background: var(--mid); padding: 7px 8px; text-align: center; }
   .purse .k { font-size: 10px; color: var(--ink-3); letter-spacing: .08em; }
   .purse .v { font-size: 16px; line-height: 1.2; text-shadow: var(--stroke); }
-  .purse .gold .v { color: var(--gold); }
-  .purse .rift .v { color: var(--rift); }
-  .purse .relic .v { color: #D9C7FF; }
+  .purse .g .v { color: var(--gold); }
+  .purse .r .v { color: var(--rift); }
+  .purse .l .v { color: var(--relic); }
 
-  /* ── 탭 바 ────────────────────────────────────────────────────── */
   .tabs {
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    border-top: 2px solid var(--gold-d);
-    background: var(--raise);
+    display: grid; grid-template-columns: repeat(4,1fr);
+    border-top: 2px solid var(--gold-d); background: var(--raise);
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   .tabs button {
     appearance: none; border: 0; background: none; cursor: pointer;
-    padding: 10px 6px 11px; color: var(--ink-3);
-    font: 400 13px/1.2 "Do Hyeon", sans-serif;
+    padding: 9px 4px 10px; color: var(--ink-3);
+    font: 400 12px/1.2 "Do Hyeon", sans-serif;
     display: flex; flex-direction: column; align-items: center; gap: 3px;
     border-top: 3px solid transparent; margin-top: -3px;
   }
-  .tabs button .ic { font-size: 17px; line-height: 1; }
+  .tabs button .ic { font-size: 16px; line-height: 1; }
   .tabs button[aria-selected="true"] { color: var(--gold); border-top-color: var(--gold); background: var(--raise2); }
   .tabs button:focus-visible { outline: 2px solid var(--rift); outline-offset: -3px; }
 
-  /* ── 패널(각인 / 계측) ────────────────────────────────────────── */
+  /* ── 시트 ─────────────────────────────────────────────────────── */
   .sheet { min-height: 0; overflow-y: auto; padding: 14px; }
-  .sheet h2 {
-    margin: 0 0 4px; font-family: "Black Han Sans", sans-serif;
-    font-size: 21px; color: var(--gold); text-shadow: var(--stroke);
-  }
-  .sheet p.lead { margin: 0 0 14px; font-size: 13px; color: var(--ink-3); }
+  .sheet h2 { margin: 0 0 3px; font-family: "Black Han Sans", sans-serif; font-size: 20px; color: var(--gold); text-shadow: var(--stroke); }
+  .sheet p.lead { margin: 0 0 13px; font-size: 13px; color: var(--ink-3); }
+  .sheet h3 { margin: 16px 0 8px; font-size: 15px; color: var(--ink-2); font-weight: 400; }
 
-  .card {
-    background: var(--raise); border: 2px solid var(--edge); border-radius: 8px;
-    padding: 12px; margin-bottom: 10px;
-  }
+  .card { background: var(--raise); border: 2px solid var(--edge); border-radius: 8px; padding: 11px; margin-bottom: 9px; }
+  .card.locked { opacity: .5; border-style: dashed; }
   .card .top { display: flex; align-items: center; gap: 10px; }
   .card .badge {
-    width: 44px; height: 44px; border-radius: 8px; flex: none;
+    width: 42px; height: 42px; border-radius: 8px; flex: none;
     background: linear-gradient(160deg, var(--raise2), #1B1038);
-    border: 2px solid var(--gold-d);
-    display: grid; place-items: center;
-    font-size: 17px; color: var(--gold); text-shadow: var(--stroke);
+    border: 2px solid var(--gold-d); display: grid; place-items: center;
+    font-size: 16px; color: var(--gold); text-shadow: var(--stroke);
   }
+  .card.locked .badge { border-color: var(--edge); color: var(--ink-3); }
   .card .name { flex: 1; min-width: 0; }
-  .card .name b { display: block; font-weight: 400; font-size: 16px; }
+  .card .name b { display: block; font-weight: 400; font-size: 15px; }
   .card .name span { font-size: 12px; color: var(--ink-3); }
   .card .right { text-align: right; font-size: 13px; color: var(--ink-2); }
-  .prog { height: 8px; border: 1px solid #1A0F33; border-radius: 5px; background: #1B1038; overflow: hidden; margin-top: 10px; }
-  .prog i { display: block; height: 100%; background: linear-gradient(180deg, #7BFFEC, var(--rift)); transition: width .2s linear; }
-  .card .note { font-size: 12px; color: var(--ink-3); margin-top: 8px; }
+  .card .right .big { font-family: "Black Han Sans", sans-serif; color: var(--gold); font-size: 16px; }
+  .prog { height: 7px; border: 1px solid #1A0F33; border-radius: 5px; background: #1B1038; overflow: hidden; margin-top: 9px; }
+  .prog i { display: block; height: 100%; background: linear-gradient(180deg,#7BFFEC,var(--rift)); transition: width .2s linear; }
+  .prog.relic i { background: linear-gradient(180deg,#E6D0FF,var(--relic-d)); }
+  .card .note { font-size: 12px; color: var(--ink-3); margin-top: 7px; }
 
-  .kv { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 9px 0; border-top: 1px solid var(--edge); font-size: 14px; }
+  .kv { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 0; border-top: 1px solid var(--edge); font-size: 14px; }
   .kv:first-of-type { border-top: 0; }
   .kv .k { color: var(--ink-2); }
   .kv .v { font-family: "Black Han Sans", sans-serif; font-variant-numeric: tabular-nums; }
-  .kv .v.rift { color: var(--rift); }
-  .kv .v.gold { color: var(--gold); }
-  .tag {
-    display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 4px;
-    font: 400 11px/1.4 "Do Hyeon", sans-serif;
-  }
-  .tag.ok  { background: var(--go-d);  color: #E9FFE9; }
-  .tag.bad { background: var(--hp-d);  color: #FFE7E5; }
+  .kv .v.rift { color: var(--rift); } .kv .v.gold { color: var(--gold); } .kv .v.relic { color: var(--relic); }
+  .tag { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 4px; font: 400 11px/1.4 "Do Hyeon", sans-serif; }
+  .tag.ok { background: var(--go-d); color: #E9FFE9; }
+  .tag.bad { background: var(--hp-d); color: #FFE7E5; }
 
   .log { list-style: none; margin: 0; padding: 0; }
-  .log li { padding: 7px 0; border-top: 1px solid var(--edge); font-size: 13px; color: var(--ink-2); display: flex; gap: 9px; }
+  .log li { padding: 6px 0; border-top: 1px solid var(--edge); font-size: 13px; color: var(--ink-2); display: flex; gap: 9px; }
   .log li:first-child { border-top: 0; }
-  .log .t { color: var(--ink-3); font-size: 11px; flex: none; width: 58px; }
+  .log .t { color: var(--ink-3); font-size: 11px; flex: none; width: 56px; }
   .log b { color: var(--gold); font-weight: 400; }
-  .log .rf { color: var(--rift); }
-  .log .cb { color: var(--combo); }
+  .log .rf { color: var(--rift); } .log .cb { color: var(--combo); } .log .rl { color: var(--relic); }
 
   .ghost {
-    appearance: none; width: 100%; margin-top: 4px;
+    appearance: none; width: 100%; margin-top: 6px;
     background: var(--raise2); border: 2px solid var(--edge); border-radius: 8px;
-    color: var(--ink-2); font: 400 14px/1 "Do Hyeon", sans-serif; padding: 12px; cursor: pointer;
+    color: var(--ink-2); font: 400 14px/1 "Do Hyeon", sans-serif; padding: 11px; cursor: pointer;
   }
   .ghost:hover { border-color: var(--hp); color: #FFD9D6; }
 
-  /* ── 축복 3택 1 ───────────────────────────────────────────────── */
-  .scrim {
-    position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
-    background: rgba(8,4,20,.78); padding: 18px;
-  }
+  .scrim { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(8,4,20,.78); padding: 18px; }
   .modal {
-    width: min(440px, 100%);
-    background: linear-gradient(180deg, var(--raise2), var(--mid));
+    width: min(440px,100%); background: linear-gradient(180deg,var(--raise2),var(--mid));
     border: 3px solid var(--gold-d); border-radius: 14px; padding: 18px;
     box-shadow: 0 0 0 2px #1A0F33, 0 20px 50px rgba(0,0,0,.6);
   }
-  .modal h3 {
-    margin: 0 0 3px; text-align: center;
-    font-family: "Black Han Sans", sans-serif; font-size: 23px; color: var(--gold);
-    text-shadow: var(--stroke);
-  }
+  .modal h3 { margin: 0 0 3px; text-align: center; font-family: "Black Han Sans", sans-serif; font-size: 22px; color: var(--gold); text-shadow: var(--stroke); }
   .modal .sub { margin: 0 0 14px; text-align: center; font-size: 12px; color: var(--ink-3); }
-  .picks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  .picks { display: grid; grid-template-columns: repeat(3,1fr); gap: 9px; }
   .pick {
-    appearance: none; cursor: pointer; color: inherit;
+    appearance: none; cursor: pointer; color: inherit; font: inherit;
     background: var(--raise); border: 2px solid var(--edge); border-radius: 10px;
     padding: 13px 8px; display: flex; flex-direction: column; align-items: center; gap: 5px;
-    font: inherit;
   }
   .pick:hover { transform: translateY(-3px); border-color: var(--gold); }
   .pick:focus-visible { outline: 3px solid var(--rift); outline-offset: 2px; }
-  .pick .tier { font-size: 11px; color: var(--ink-3); letter-spacing: .06em; }
-  .pick .mult { font-family: "Black Han Sans", sans-serif; font-size: 25px; text-shadow: var(--stroke); }
+  .pick .tier { font-size: 11px; color: var(--ink-3); }
+  .pick .mult { font-family: "Black Han Sans", sans-serif; font-size: 24px; text-shadow: var(--stroke); }
   .pick.t0 .mult { color: var(--ink-2); }
-  .pick.t1 .mult { color: #7BD9FF; }
-  .pick.t1 { border-color: #3C7FA8; }
-  .pick.t2 .mult { color: #C79BFF; }
-  .pick.t2 { border-color: #7B4FC0; }
+  .pick.t1 { border-color: #3C7FA8; } .pick.t1 .mult { color: #7BD9FF; }
+  .pick.t2 { border-color: #7B4FC0; } .pick.t2 .mult { color: #C79BFF; }
+  .pick.t3 { border-color: var(--gold); background: linear-gradient(180deg,#4A3410,var(--raise)); }
   .pick.t3 .mult { color: var(--gold); }
-  .pick.t3 { border-color: var(--gold); background: linear-gradient(180deg, #4A3410, var(--raise)); }
   .pick .eff { font-size: 11px; color: var(--ink-3); text-align: center; }
   .ticket { margin: 12px 0 0; text-align: center; font-size: 12px; color: var(--gold); }
 
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation: none !important; transition: none !important; }
-  }
+  @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation: none !important; transition: none !important; } }
 </style>
 
 <div class="app">
   <header class="hud">
     <div class="hud-top">
       <div class="stage">
-        <div class="lbl">한계 스테이지</div>
-        <div class="val stat" id="stage">100</div>
-      </div>
-      <div class="clock">
-        <div class="d" id="day">1일차</div>
-        <div class="t stat" id="time">08:00</div>
+        <div class="lbl">스테이지</div>
+        <div class="val stat" id="stage">0.0</div>
+        <div class="cap">한계 <b class="stat" id="smax">100.0</b> · <span id="dayTime">1일차 08:00</span></div>
       </div>
       <div class="speed" role="group" aria-label="시간 배속">
         <button type="button" data-speed="0.000278">실시간</button>
@@ -343,40 +256,56 @@
         <button type="button" data-speed="0.166667">600×</button>
       </div>
     </div>
-    <div class="bar-wrap">
-      <div class="bar-head">
-        <span>균열 응결</span>
-        <b id="barNote">다음 스택까지 55분</b>
-      </div>
-      <div class="bar" id="bar"><i style="width:0%"></i><span id="barText">0 / 5</span></div>
+    <div class="runbar">
+      <div class="head"><span id="runLabel">이번 회차</span><b id="runNote">승급까지 10시간</b></div>
+      <div class="track" id="runTrack"><i style="width:0%"></i></div>
     </div>
   </header>
 
-  <!-- 탭 1: 균열 (메인 플레이) -->
-  <section class="arena" id="viewRift" role="tabpanel" aria-labelledby="tabRift">
-    <div class="combo">
-      <div class="n stat idle" id="comboN">연쇄 없음</div>
-      <div class="w" id="comboW">1.5시간 안에 다시 수령하면 연쇄가 이어진다</div>
-      <div class="combo-bar"><i id="comboBar" style="width:0%"></i></div>
+  <!-- 탭 1: 타이탄 -->
+  <section class="arena" id="viewTitan" role="tabpanel" aria-labelledby="tabTitan">
+    <div class="titan-name">
+      <div class="n" id="titanName">균열이 아직 비었다</div>
+      <div class="r" id="titanRank">55분마다 하나씩 응결한다</div>
     </div>
 
-    <button type="button" class="rift-btn" id="riftBtn">
-      <span class="rift-rays"></span>
-      <span class="rift-core"></span>
-      <span class="rift-face">
-        <span class="amount stat" id="riftAmt">0</span>
-        <span class="unit" id="riftUnit">균열석 대기</span>
-      </span>
+    <button type="button" class="titan-btn" id="titanBtn" aria-label="타이탄 처치">
+      <svg viewBox="0 0 120 124" role="img" aria-hidden="true">
+        <ellipse class="aura" cx="60" cy="74" rx="54" ry="48" fill="var(--rift-d)" opacity=".3"/>
+        <path d="M32 44 L19 12 L47 35 Z" fill="var(--titan-horn, #6B4FA8)"/>
+        <path d="M88 44 L101 12 L73 35 Z" fill="var(--titan-horn, #6B4FA8)"/>
+        <ellipse cx="60" cy="76" rx="41" ry="38" fill="var(--titan-body, #3A2566)"/>
+        <ellipse cx="60" cy="62" rx="33" ry="22" fill="var(--titan-face, #4A2F80)"/>
+        <ellipse cx="47" cy="64" rx="7.5" ry="9.5" fill="var(--titan-eye, #4FE3D0)"/>
+        <ellipse cx="73" cy="64" rx="7.5" ry="9.5" fill="var(--titan-eye, #4FE3D0)"/>
+        <ellipse cx="47" cy="66" rx="3" ry="4" fill="#0C0620"/>
+        <ellipse cx="73" cy="66" rx="3" ry="4" fill="#0C0620"/>
+        <path d="M43 92 Q60 105 77 92 Q60 98 43 92 Z" fill="#160C2E"/>
+        <path d="M49 94 L52 100 L55 94 Z M65 94 L68 100 L71 94 Z" fill="#E8DFFF"/>
+      </svg>
     </button>
 
+    <div class="cond">
+      <div class="head"><span>응결</span><span id="condNote">0 / 5</span></div>
+      <div class="bar"><i id="condFill" style="width:0%"></i><span id="condText">전리품 —</span></div>
+    </div>
+
     <div class="orbs" id="orbs"></div>
+
+    <div class="combo">
+      <div class="n stat idle" id="comboN">연쇄 없음</div>
+      <div class="w" id="comboW">1.5시간 안에 다시 처치하면 연쇄가 이어진다</div>
+      <div class="combo-bar"><i id="comboBar" style="width:0%"></i></div>
+    </div>
   </section>
 
-  <!-- 탭 2: 각인 -->
-  <section class="sheet" id="viewForge" role="tabpanel" aria-labelledby="tabForge" hidden>
-    <h2>각인</h2>
-    <p class="lead">균열석은 들어오는 즉시 각인에 쏟아붓는다. 각인 1레벨마다 한계 스테이지가 2.5씩 오른다.</p>
+  <!-- 탭 2: 영웅 -->
+  <section class="sheet" id="viewHero" role="tabpanel" aria-labelledby="tabHero" hidden>
+    <h2>영웅</h2>
+    <p class="lead">한계 스테이지가 50 오를 때마다 영웅이 합류하고, 수급 계단이 15%씩 오른다.</p>
+    <div id="heroList"></div>
 
+    <h3>각인</h3>
     <div class="card">
       <div class="top">
         <div class="badge stat" id="engLv">0</div>
@@ -390,65 +319,72 @@
         </div>
       </div>
       <div class="prog"><i id="engProg" style="width:0%"></i></div>
-      <div class="note">자동 강화 중 — 비용은 레벨마다 8%씩 오른다.</div>
+      <div class="note">전리품은 들어오는 즉시 각인에 쏟아붓는다 — 비용은 레벨마다 8%씩 오른다.</div>
+    </div>
+  </section>
+
+  <!-- 탭 3: 유물 -->
+  <section class="sheet" id="viewRelic" role="tabpanel" aria-labelledby="tabRelic" hidden>
+    <h2>유물</h2>
+    <p class="lead">회차를 마치면 도달 스테이지에 따라 유물을 얻고, 유물은 한계 스테이지를 영구히 올린다. 다음 회차는 더 멀리 간다.</p>
+
+    <div class="card">
+      <div class="top">
+        <div class="badge stat">◆</div>
+        <div class="name"><b>누적 유물</b><span id="relicCount">0회 승급</span></div>
+        <div class="right"><div class="big stat" id="relicTotal">0</div></div>
+      </div>
+      <div class="prog relic"><i id="prProg" style="width:0%"></i></div>
+      <div class="note" id="prNote">다음 승급까지 10.0시간</div>
     </div>
 
     <div class="card">
       <div class="top">
         <div class="badge stat">↑</div>
-        <div class="name">
-          <b>영웅 해금</b>
-          <span>한계 스테이지 50마다 수급 계단 +15%</span>
-        </div>
-        <div class="right"><div class="stat" style="color:var(--gold)" id="heroMult">×1.00</div></div>
+        <div class="name"><b>한계 환류</b><span>유물이 한계 스테이지로 되돌아온다</span></div>
+        <div class="right"><div class="big stat" id="relicFeed">+0.0</div></div>
       </div>
-      <div class="prog"><i id="heroProg" style="width:0%"></i></div>
-      <div class="note" id="heroNote">다음 계단까지 50.0</div>
+      <div class="note">유물 총량의 로그에 비례한다 — 쌓을수록 한 개의 무게는 줄어든다.</div>
     </div>
 
     <div class="card">
       <div class="top">
-        <div class="badge stat">◆</div>
-        <div class="name">
-          <b>승급</b>
-          <span>10시간마다 자동 — 유물이 한계 스테이지로 영구 환류</span>
-        </div>
-        <div class="right"><div class="stat" style="color:#D9C7FF" id="prCount">0회</div></div>
+        <div class="badge stat">◎</div>
+        <div class="name"><b>다음 회차 예상</b><span id="nextRunNote">이번 회차를 끝내면</span></div>
+        <div class="right"><div class="big stat" id="nextRelic">—</div></div>
       </div>
-      <div class="prog"><i id="prProg" style="width:0%"></i></div>
-      <div class="note" id="prNote">다음 승급까지 10.0시간</div>
+      <div class="note">도달 스테이지의 지수함수라, 회차 끝까지 밀수록 급격히 커진다.</div>
     </div>
   </section>
 
-  <!-- 탭 3: 계측 -->
+  <!-- 탭 4: 계측 -->
   <section class="sheet" id="viewGauge" role="tabpanel" aria-labelledby="tabGauge" hidden>
     <h2>계측</h2>
     <p class="lead">tt3_sim.py와 같은 정의로 산출한다. 목표 구간을 벗어나면 표시가 붙는다.</p>
-
     <div class="card">
       <div class="kv"><span class="k">성장 단위</span><span class="v" id="mGrowth">0</span></div>
       <div class="kv"><span class="k">1층 금화</span><span class="v gold" id="mGold">0</span></div>
-      <div class="kv"><span class="k">2층 균열석</span><span class="v rift" id="mRift">0</span></div>
+      <div class="kv"><span class="k">2층 전리품</span><span class="v rift" id="mRift">0</span></div>
       <div class="kv"><span class="k">2층 비중</span><span class="v" id="mL2">—</span></div>
       <div class="kv"><span class="k">연쇄 기여</span><span class="v" id="mChain">—</span></div>
-      <div class="kv"><span class="k">수령 · 클립</span><span class="v" id="mCheck">0 · 0</span></div>
+      <div class="kv"><span class="k">처치 · 클립</span><span class="v" id="mCheck">0 · 0</span></div>
       <div class="kv"><span class="k">오늘 연쇄</span><span class="v" id="mToday">0 / 5</span></div>
     </div>
-
-    <h2 style="font-size:17px">기록</h2>
+    <h3>기록</h3>
     <ul class="log" id="log"></ul>
     <button type="button" class="ghost" id="resetBtn">기록 지우고 처음부터</button>
   </section>
 
   <div class="purse">
-    <div class="gold"><div class="k">금화</div><div class="v stat" id="pGold">0</div></div>
-    <div class="rift"><div class="k">균열석</div><div class="v stat" id="pRift">0</div></div>
-    <div class="relic"><div class="k">유물</div><div class="v stat" id="pRelic">0</div></div>
+    <div class="g"><div class="k">금화</div><div class="v stat" id="pGold">0</div></div>
+    <div class="r"><div class="k">전리품</div><div class="v stat" id="pRift">0</div></div>
+    <div class="l"><div class="k">유물</div><div class="v stat" id="pRelic">0</div></div>
   </div>
 
   <nav class="tabs" role="tablist">
-    <button type="button" role="tab" id="tabRift"  aria-selected="true"  aria-controls="viewRift"><span class="ic">◈</span>균열</button>
-    <button type="button" role="tab" id="tabForge" aria-selected="false" aria-controls="viewForge"><span class="ic">⚒</span>각인</button>
+    <button type="button" role="tab" id="tabTitan" aria-selected="true"  aria-controls="viewTitan"><span class="ic">☠</span>타이탄</button>
+    <button type="button" role="tab" id="tabHero"  aria-selected="false" aria-controls="viewHero"><span class="ic">⚔</span>영웅</button>
+    <button type="button" role="tab" id="tabRelic" aria-selected="false" aria-controls="viewRelic"><span class="ic">◆</span>유물</button>
     <button type="button" role="tab" id="tabGauge" aria-selected="false" aria-controls="viewGauge"><span class="ic">◉</span>계측</button>
   </nav>
 </div>
@@ -456,7 +392,7 @@
 <div class="scrim" id="scrim" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="blessTitle">
     <h3 id="blessTitle">축복 3택 1</h3>
-    <p class="sub">다음 수령까지 금화와 균열석 수급에 함께 적용된다</p>
+    <p class="sub">다음 처치까지 금화와 전리품 수급에 함께 적용된다</p>
     <div class="picks" id="picks"></div>
     <p class="ticket" id="ticket" hidden>등급상향권을 써서 한 장을 위로 올렸다</p>
   </div>
@@ -465,19 +401,15 @@
 <script>
 /* ═══════════════════════════════════════════════════════════════════
    확정 경제 파라미터 — tt3_sim.py의 Config를 그대로 옮긴 값.
-   (stack_cap 5 / chain_bonus_graded / chain_complete_bonus 440 /
-    gold_per_hour 130 은 --recommended가 5제약으로 검증한 확정안이다.)
-   여기 숫자를 바꾸면 그 검증 밖으로 나간다. 바꾸기 전에 시뮬레이터를 돌릴 것.
+   stack_cap 5 / chain_bonus_graded / chain_complete_bonus 440 /
+   gold_per_hour 130 은 --recommended가 5제약으로 검증한 확정안이다.
    ═══════════════════════════════════════════════════════════════════ */
 const CFG = {
   stackBase: 60, stackCap: 5, stackIntervalH: 55 / 60,
-  freshnessTable: [[1.0, 1.00], [2.0, 0.90], [3.0, 0.80]],
-  freshnessFloor: 0.70,
+  freshnessTable: [[1.0,1.00],[2.0,0.90],[3.0,0.80]], freshnessFloor: 0.70,
   chainWindowH: 1.5,
   chainMults: [1.05, 1.10, 1.18, 1.26, 1.35],
-  chainDailyCap: 5,
-  chainCompleteBonus: 440.0,
-  chainBonusGraded: true,
+  chainDailyCap: 5, chainCompleteBonus: 440.0, chainBonusGraded: true,
   goldPerHour: 130.0, goldOfflineEff: 0.90,
   riftToUnit: 3.0,
   engraveCostBase: 40.0, engraveCostGrowth: 1.08, engraveSmaxGain: 2.5,
@@ -485,37 +417,53 @@ const CFG = {
   tauH: 3.0, relicBase: 1.02, relicCoef: 2.0, relicOffset: 50.0,
   prestigeTargetH: 10.0, relicFeedbackCoef: 30.0,
   blessings: [
-    { p: 0.60, mult: 1.00, clip: false, name: "일반" },
-    { p: 0.27, mult: 1.10, clip: false, name: "희귀" },
-    { p: 0.10, mult: 1.25, clip: false, name: "영웅" },
-    { p: 0.03, mult: 1.60, clip: true,  name: "전설" },
+    { p:0.60, mult:1.00, clip:false, name:"일반" },
+    { p:0.27, mult:1.10, clip:false, name:"희귀" },
+    { p:0.10, mult:1.25, clip:false, name:"영웅" },
+    { p:0.03, mult:1.60, clip:true,  name:"전설" },
   ],
   upgradeTicketShift: 0.5,
   heroStepSmax: 50.0, heroStepMult: 1.15,
-  // 목표 구간 (계측 탭 판정)
   l2Lo: 0.40, l2Hi: 0.55, chainLo: 0.08, chainHi: 0.12,
   offlineCapH: 72,
 };
 /* 온보딩 예외(첫 승급 tau 단축, 연쇄창 4.6h)는 시뮬레이터에서 D_쇼츠유입
-   코호트 전용이라 여기서는 켜지 않는다. 이 화면은 정상 상태 파라미터로 돈다. */
+   코호트 전용이라 여기서는 켜지 않는다. 정상 상태 파라미터로 돈다. */
+
+/* 영웅은 장식이 아니라 실제 hero_mult 계단이다. 한계 스테이지 50마다 한 명씩
+   합류하고, 각자 ×1.15를 보탠다 (곱이 곧 heroMultOf). */
+const HEROES = [
+  { n: "잿불의 검사",   d: "첫 균열을 베어낸 자" },
+  { n: "서리 궁수",     d: "얼어붙은 화살로 응결을 늦춘다" },
+  { n: "폭풍 술사",     d: "번개로 연쇄를 잇는다" },
+  { n: "대지 수호자",   d: "무너지는 균열을 떠받친다" },
+  { n: "심연 사제",     d: "유물의 목소리를 듣는다" },
+  { n: "여명의 기사",   d: "밤을 끝내러 온다" },
+  { n: "공허 무희",     d: "두 균열 사이에서 춤춘다" },
+  { n: "별을 삼킨 자",  d: "한계를 셈하지 않는다" },
+];
+const TITAN_RANKS = [
+  { n: "균열 파편",     r: "갓 맺힌 조각" },
+  { n: "균열 수호병",   r: "형태를 갖췄다" },
+  { n: "균열 거인",     r: "땅이 울린다" },
+  { n: "균열 군주",     r: "빛이 휘어진다" },
+  { n: "태고의 티탄",   r: "가장 굵게 맺혔다" },
+];
 
 const START_T = 8.0;
-const SAVE_KEY = "tt3.titan.v2";
+const SAVE_KEY = "tt3.titan.v3";
 
 /* ── 순수 경제 함수 (Player의 대응 메서드와 1:1) ──────────────────── */
 function freshness(ageH) {
   for (const [limit, mult] of CFG.freshnessTable) if (ageH <= limit) return mult;
   return CFG.freshnessFloor;
 }
-function heroMultOf(smax) {
-  const steps = Math.max(0, Math.floor((smax - CFG.smaxInitial) / CFG.heroStepSmax));
-  return Math.pow(CFG.heroStepMult, steps);
-}
+function heroMultOf(smax) { return Math.pow(CFG.heroStepMult, heroCount(smax)); }
+function heroCount(smax) { return Math.max(0, Math.floor((smax - CFG.smaxInitial) / CFG.heroStepSmax)); }
 function engraveCost(lv) { return CFG.engraveCostBase * Math.pow(CFG.engraveCostGrowth, lv); }
-function relicsFor(smax, elapsedH, tau) {
-  const stage = smax * (1 - Math.exp(-elapsedH / tau));
-  return CFG.relicCoef * Math.pow(CFG.relicBase, stage - CFG.relicOffset);
-}
+// 회차 중 도달 스테이지 — 경과 시간에 따라 한계로 수렴한다 (maybe_prestige와 동일 식)
+function stageAt(smax, elapsedH) { return smax * (1 - Math.exp(-elapsedH / CFG.tauH)); }
+function relicsFor(stage) { return CFG.relicCoef * Math.pow(CFG.relicBase, stage - CFG.relicOffset); }
 
 /* ── 상태 ─────────────────────────────────────────────────────────── */
 let S, speed = 0.016667, paused = false, lastFrame = 0;
@@ -525,14 +473,15 @@ function freshState() {
     t: START_T, smaxBase: CFG.smaxInitial, engraveLv: 0, totalRelics: 0,
     riftBalance: 0, riftUnits: 0, riftFromChain: 0, goldUnits: 0,
     stacks: [], nextStackT: START_T + CFG.stackIntervalH,
-    lastCollectT: -999, chainToday: 0,
-    hasTicket: false, lastPrestigeT: START_T, prestigeCount: 0,
+    lastCollectT: -999, chainToday: 0, hasTicket: false,
+    lastPrestigeT: START_T, prestigeCount: 0,
     blessingMult: 1.0, clips: 0, checkins: 0, log: [],
   };
 }
 const smaxOf = () => S.smaxBase + S.engraveLv * CFG.engraveSmaxGain
   + CFG.relicFeedbackCoef * Math.log10(1 + S.totalRelics);
 const growthUnits = () => S.goldUnits + S.riftUnits;
+const curStage = () => stageAt(smaxOf(), S.t - S.lastPrestigeT);
 
 /* ── 시간 진행 ────────────────────────────────────────────────────── */
 function accrueGold(until) {
@@ -551,58 +500,61 @@ function advance(toT) {
   const prevDay = Math.floor(S.t / 24);
   accrueGold(toT);
   generateStacks(toT);
-  // 일일 연쇄 상한은 날짜가 바뀌면 초기화된다 (시뮬레이터 run_day 말미와 동일)
-  if (Math.floor(S.t / 24) !== prevDay) S.chainToday = 0;
+  if (Math.floor(S.t / 24) !== prevDay) S.chainToday = 0;  // 일일 연쇄 상한 초기화
 }
 
-/* ── 수령 1회 = 시뮬레이터의 check_in ─────────────────────────────── */
-function checkIn(evt) {
+/* ── 타이탄 처치 = 시뮬레이터의 check_in ──────────────────────────── */
+function slay(evt) {
   const now = S.t;
   advance(now);
   S.checkins += 1;
   if (S.stacks.length === 0) { render(); return; }
 
-  const raw = S.stacks.reduce((sum, born) => sum + CFG.stackBase * freshness(now - born), 0);
+  const raw = S.stacks.reduce((s, born) => s + CFG.stackBase * freshness(now - born), 0);
   const within = (now - S.lastCollectT) <= CFG.chainWindowH;
 
   let mult = 1.0, chained = false;
   if (within && S.chainToday < CFG.chainDailyCap) {
-    S.chainToday += 1;
-    chained = true;
+    S.chainToday += 1; chained = true;
     mult = CFG.chainMults[Math.min(S.chainToday, CFG.chainMults.length) - 1];
   } else if (!within) {
-    S.chainToday = 0;                 // 끊기면 초기화만. 감소 페널티는 없다
+    S.chainToday = 0;               // 끊기면 초기화만. 감소 페널티는 없다
   }
 
   const scale = heroMultOf(smaxOf());
   let gained = raw * mult;
   S.riftFromChain += raw * (mult - 1) * CFG.riftToUnit * scale;
 
-  // 완주 보너스. 확정안은 '비례 지급'이라 연쇄 단계마다 bonus/cap씩 들어온다.
-  let bonusPaid = 0, completed = false;
+  // 확정안은 완주 보너스를 '비례 지급'한다 — 연쇄 단계마다 bonus/cap씩 들어온다
+  let bonus = 0, completed = false;
   if (CFG.chainBonusGraded) {
     if (within && S.chainToday >= 1) {
-      const inc = CFG.chainCompleteBonus / Math.max(1, CFG.chainDailyCap);
-      gained += inc; bonusPaid = inc;
-      S.riftFromChain += inc * CFG.riftToUnit * scale;
+      bonus = CFG.chainCompleteBonus / Math.max(1, CFG.chainDailyCap);
+      gained += bonus;
+      S.riftFromChain += bonus * CFG.riftToUnit * scale;
       if (S.chainToday === CFG.chainDailyCap) { S.hasTicket = true; completed = true; }
     }
   } else if (S.chainToday === CFG.chainDailyCap && within) {
-    gained += CFG.chainCompleteBonus; bonusPaid = CFG.chainCompleteBonus;
-    S.riftFromChain += CFG.chainCompleteBonus * CFG.riftToUnit * scale;
+    bonus = CFG.chainCompleteBonus;
+    gained += bonus;
+    S.riftFromChain += bonus * CFG.riftToUnit * scale;
     S.hasTicket = true; completed = true;
   }
 
   S.riftBalance += gained;
   S.riftUnits += gained * CFG.riftToUnit * scale;
+  const slain = S.stacks.length;
   S.stacks = [];
   S.nextStackT = now + CFG.stackIntervalH;
   S.lastCollectT = now;
 
   popNumber(evt, gained, chained);
-  const bits = [`<span class="rf">+${fmt(gained)}</span> 균열석`];
+  const btn = document.getElementById("titanBtn");
+  btn.classList.remove("hit"); void btn.offsetWidth; btn.classList.add("hit");
+
+  const bits = [`${TITAN_RANKS[Math.min(slain, 5) - 1].n} 처치 · <span class="rf">+${fmt(gained)}</span>`];
   if (chained) bits.push(`<span class="cb">${S.chainToday}연쇄 ×${mult.toFixed(2)}</span>`);
-  if (bonusPaid > 0) bits.push(`완주 보너스 +${fmt(bonusPaid)}`);
+  if (bonus > 0) bits.push(`완주 보너스 +${fmt(bonus)}`);
   if (completed) bits.push(`<b>5연쇄 완주 · 등급상향권</b>`);
   logLine(bits.join(" · "));
 
@@ -618,23 +570,34 @@ function spendOnEngrave() {
     S.riftBalance -= engraveCost(S.engraveLv);
     S.engraveLv += 1;
   }
-  if (S.engraveLv > before) logLine(`각인 <b>Lv ${before} → ${S.engraveLv}</b> · 스테이지 ${smaxOf().toFixed(1)}`);
+  if (S.engraveLv > before) {
+    const heroesBefore = heroCount(S.smaxBase + before * CFG.engraveSmaxGain
+      + CFG.relicFeedbackCoef * Math.log10(1 + S.totalRelics));
+    const heroesNow = heroCount(smaxOf());
+    logLine(`각인 <b>Lv ${before} → ${S.engraveLv}</b> · 한계 ${smaxOf().toFixed(1)}`);
+    for (let i = heroesBefore; i < heroesNow; i++) {
+      const h = HEROES[Math.min(i, HEROES.length - 1)];
+      logLine(`<b>${h.n}</b> 합류 — 수급 계단 ×${CFG.heroStepMult.toFixed(2)}`);
+      toast(`${h.n} 합류`);
+    }
+  }
 }
 
 function maybePrestige(now) {
   const elapsed = now - S.lastPrestigeT;
   if (elapsed < CFG.prestigeTargetH) return;
-  const got = Math.max(0, relicsFor(smaxOf(), elapsed, CFG.tauH));
+  const reached = stageAt(smaxOf(), elapsed);
+  const got = Math.max(0, relicsFor(reached));
   S.totalRelics += got;
   S.lastPrestigeT = now;
   S.prestigeCount += 1;
-  logLine(`<b>승급 ${S.prestigeCount}회차</b> — 유물 +${fmt(got)}`);
+  logLine(`<b>${S.prestigeCount}회차 종료</b> — 스테이지 ${reached.toFixed(1)} 도달, <span class="rl">유물 +${fmt(got)}</span>`);
+  toast(`승급 · 유물 +${fmt(got)}`);
 }
 
 /* ── 축복 3택 1 ───────────────────────────────────────────────────── */
 function sampleTier() {
-  const r = Math.random();
-  let acc = 0;
+  const r = Math.random(); let acc = 0;
   for (let i = 0; i < CFG.blessings.length; i++) { acc += CFG.blessings[i].p; if (r <= acc) return i; }
   return 0;
 }
@@ -655,8 +618,7 @@ function drawBlessing() {
   tiers.forEach((ti) => {
     const b = CFG.blessings[ti];
     const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "pick t" + ti;
+    btn.type = "button"; btn.className = "pick t" + ti;
     btn.innerHTML = `<span class="tier">${b.name}</span>
       <span class="mult">×${b.mult.toFixed(2)}</span>
       <span class="eff">${b.clip ? "클립 자동 저장" : "수급 배율"}</span>`;
@@ -673,24 +635,29 @@ function pickBlessing(ti) {
   if (b.clip) { S.clips += 1; logLine(`<b>전설 축복</b> — 클립 ${S.clips}개째 저장`); }
   else logLine(`축복 <b>${b.name}</b> ×${b.mult.toFixed(2)}`);
   document.getElementById("scrim").hidden = true;
-  paused = false;
-  save(); render();
+  paused = false; save(); render();
 }
 
 /* ── 연출 ─────────────────────────────────────────────────────────── */
 function popNumber(evt, amount, crit) {
-  const arena = document.getElementById("viewRift");
+  const arena = document.getElementById("viewTitan");
   if (!arena || arena.hidden) return;
   const r = arena.getBoundingClientRect();
   const el = document.createElement("span");
   el.className = "pop" + (crit ? " crit" : "");
   el.textContent = "+" + fmt(amount);
-  const x = evt && evt.clientX ? evt.clientX - r.left : r.width / 2;
-  const y = evt && evt.clientY ? evt.clientY - r.top : r.height / 2;
-  el.style.left = x + "px";
-  el.style.top = y + "px";
+  el.style.left = (evt?.clientX ? evt.clientX - r.left : r.width / 2) + "px";
+  el.style.top = (evt?.clientY ? evt.clientY - r.top : r.height / 2) + "px";
   arena.appendChild(el);
   setTimeout(() => el.remove(), 1000);
+}
+function toast(text) {
+  const arena = document.getElementById("viewTitan");
+  if (!arena) return;
+  const el = document.createElement("div");
+  el.className = "toast"; el.textContent = text;
+  arena.appendChild(el);
+  setTimeout(() => el.remove(), 2400);
 }
 function logLine(html) {
   S.log.unshift({ t: S.t, html });
@@ -715,31 +682,59 @@ function hoursLabel(h) {
 
 /* ── 렌더 ─────────────────────────────────────────────────────────── */
 function render() {
-  const now = S.t, smax = smaxOf(), gu = growthUnits(), hm = heroMultOf(smax);
+  const now = S.t, smax = smaxOf(), gu = growthUnits();
+  const elapsed = now - S.lastPrestigeT, stage = stageAt(smax, elapsed);
 
-  document.getElementById("stage").textContent = smax.toFixed(1);
-  document.getElementById("day").textContent = (Math.floor(now / 24) + 1) + "일차";
-  document.getElementById("time").textContent = clockOf(now);
+  document.getElementById("stage").textContent = stage.toFixed(1);
+  document.getElementById("smax").textContent = smax.toFixed(1);
+  document.getElementById("dayTime").textContent =
+    (Math.floor(now / 24) + 1) + "일차 " + clockOf(now);
 
-  // 균열 응결 바 = 스택 보유량, 채워지는 중이면 다음 스택까지의 진행
-  const full = S.stacks.length >= CFG.stackCap;
-  const bar = document.getElementById("bar");
+  // 회차 진행 = 한계까지 얼마나 밀었는가
+  const ready = elapsed >= CFG.prestigeTargetH;
+  const track = document.getElementById("runTrack");
+  track.classList.toggle("ready", ready);
+  track.querySelector("i").style.width =
+    Math.min(100, (stage / Math.max(1e-9, smax)) * 100).toFixed(1) + "%";
+  document.getElementById("runLabel").textContent =
+    `${S.prestigeCount + 1}회차 · 한계의 ${((stage / Math.max(1e-9, smax)) * 100).toFixed(0)}%`;
+  document.getElementById("runNote").textContent = ready
+    ? "승급 준비됨 — 다음 처치에서"
+    : "승급까지 " + hoursLabel(CFG.prestigeTargetH - elapsed);
+
+  // 타이탄
+  const n = S.stacks.length;
+  const rank = n > 0 ? TITAN_RANKS[Math.min(n, 5) - 1] : null;
+  document.getElementById("titanName").textContent = rank ? rank.n : "균열이 아직 비었다";
+  document.getElementById("titanRank").textContent = rank ? rank.r : "55분마다 하나씩 응결한다";
+
+  let pending = 0;
+  for (const born of S.stacks) pending += CFG.stackBase * freshness(now - born);
+
+  const btn = document.getElementById("titanBtn");
+  btn.disabled = n === 0;
+  // 등급이 오를수록 눈과 몸이 뜨겁게 물든다
+  const hue = ["#4FE3D0", "#63E38C", "#E3D14F", "#E39A4F", "#E3574F"][Math.max(0, Math.min(n, 5) - 1)];
+  btn.style.setProperty("--titan-eye", n ? hue : "#4A3F6B");
+  btn.style.setProperty("--titan-body", n >= 4 ? "#52246B" : "#3A2566");
+  btn.style.setProperty("--titan-horn", n >= 4 ? "#A84FA0" : "#6B4FA8");
+  btn.style.width = "min(" + (38 + n * 3) + "vw, " + (140 + n * 12) + "px)";
+
+  const full = n >= CFG.stackCap;
   const frac = full ? 1 : 1 - Math.max(0, Math.min(1, (S.nextStackT - now) / CFG.stackIntervalH));
-  const perStack = 1 / CFG.stackCap;
-  bar.querySelector("i").style.width =
-    Math.min(100, (S.stacks.length * perStack + (full ? 0 : frac * perStack)) * 100).toFixed(1) + "%";
-  bar.classList.toggle("full", full);
-  document.getElementById("barText").textContent = `${S.stacks.length} / ${CFG.stackCap}`;
-  document.getElementById("barNote").textContent =
-    full ? "가득 참 — 생성이 멈췄다" : "다음 스택까지 " + hoursLabel(S.nextStackT - now);
+  const per = 1 / CFG.stackCap;
+  document.getElementById("condFill").style.width =
+    Math.min(100, (n * per + (full ? 0 : frac * per)) * 100).toFixed(1) + "%";
+  document.getElementById("condNote").textContent = `${n} / ${CFG.stackCap}`;
+  document.getElementById("condText").textContent =
+    n ? "전리품 " + fmt(pending) : (full ? "가득 참" : "응결 중 " + hoursLabel(S.nextStackT - now));
 
-  // 스택 오브
+  // 오브
   const orbs = document.getElementById("orbs");
   if (orbs.children.length !== CFG.stackCap) {
     orbs.innerHTML = Array.from({ length: CFG.stackCap },
       () => `<div class="orb"><div class="dot">·</div><div class="f">—</div></div>`).join("");
   }
-  let pending = 0;
   for (let i = 0; i < CFG.stackCap; i++) {
     const el = orbs.children[i], born = S.stacks[i];
     if (born === undefined) {
@@ -748,35 +743,25 @@ function render() {
       el.querySelector(".f").textContent = "—";
     } else {
       const f = freshness(now - born);
-      pending += CFG.stackBase * f;
       el.className = "orb on";
       el.querySelector(".dot").textContent = Math.round(CFG.stackBase * f);
       el.querySelector(".f").textContent = f.toFixed(2);
     }
   }
 
-  // 균열 본체
-  const btn = document.getElementById("riftBtn");
-  btn.disabled = S.stacks.length === 0;
-  document.getElementById("riftAmt").textContent = S.stacks.length ? fmt(pending) : "—";
-  document.getElementById("riftUnit").textContent =
-    S.stacks.length ? "눌러서 수령" : "응결을 기다리는 중";
-
   // 연쇄
   const since = now - S.lastCollectT;
   const open = S.lastCollectT > -900 && since <= CFG.chainWindowH;
   const capped = S.chainToday >= CFG.chainDailyCap;
-  const cn = document.getElementById("comboN"), cw = document.getElementById("comboW");
+  const cn = document.getElementById("comboN");
   if (S.chainToday > 0) {
     cn.className = "n stat";
     cn.textContent = S.chainToday + "연쇄  ×" + CFG.chainMults[Math.min(S.chainToday, 5) - 1].toFixed(2);
-  } else {
-    cn.className = "n stat idle";
-    cn.textContent = "연쇄 없음";
-  }
-  cw.textContent = capped ? "오늘 상한 도달 — 내일 다시 이어진다"
+  } else { cn.className = "n stat idle"; cn.textContent = "연쇄 없음"; }
+  document.getElementById("comboW").textContent = capped
+    ? "오늘 상한 도달 — 내일 다시 이어진다"
     : open ? "창 " + hoursLabel(CFG.chainWindowH - since) + " 남음"
-    : "1.5시간 안에 다시 수령하면 연쇄가 이어진다";
+    : "1.5시간 안에 다시 처치하면 연쇄가 이어진다";
   document.getElementById("comboBar").style.width =
     (!capped && open ? Math.max(0, (1 - since / CFG.chainWindowH) * 100) : 0).toFixed(1) + "%";
 
@@ -785,29 +770,54 @@ function render() {
   document.getElementById("pRift").textContent = fmt(S.riftBalance);
   document.getElementById("pRelic").textContent = fmt(S.totalRelics);
 
-  // 각인 탭
+  // 영웅 탭
+  const hc = heroCount(smax);
+  const list = document.getElementById("heroList");
+  const want = Math.min(HEROES.length, hc + 1);
+  if (list.dataset.n !== String(want) + ":" + hc) {
+    list.dataset.n = String(want) + ":" + hc;
+    list.innerHTML = HEROES.slice(0, want).map((h, i) => {
+      const at = CFG.smaxInitial + (i + 1) * CFG.heroStepSmax;
+      const on = i < hc;
+      return `<div class="card${on ? "" : " locked"}">
+        <div class="top">
+          <div class="badge stat">${on ? i + 1 : "?"}</div>
+          <div class="name"><b>${on ? h.n : "미합류"}</b><span>${on ? h.d : "한계 " + at.toFixed(0) + " 도달 시 합류"}</span></div>
+          <div class="right"><div class="big stat">×${CFG.heroStepMult.toFixed(2)}</div></div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  const nextAt = CFG.smaxInitial + (hc + 1) * CFG.heroStepSmax;
+  const lastCard = list.lastElementChild;
+  if (lastCard && lastCard.classList.contains("locked")) {
+    const prev = CFG.smaxInitial + hc * CFG.heroStepSmax;
+    let p = lastCard.querySelector(".prog");
+    if (!p) { p = document.createElement("div"); p.className = "prog"; p.innerHTML = "<i></i>"; lastCard.appendChild(p); }
+    p.querySelector("i").style.width =
+      Math.max(0, Math.min(100, ((smax - prev) / CFG.heroStepSmax) * 100)).toFixed(1) + "%";
+  }
+
   const cost = engraveCost(S.engraveLv);
   document.getElementById("engLv").textContent = S.engraveLv;
-  document.getElementById("engGain").textContent =
-    "한계 스테이지 +" + (S.engraveLv * CFG.engraveSmaxGain).toFixed(1);
+  document.getElementById("engGain").textContent = "한계 스테이지 +" + (S.engraveLv * CFG.engraveSmaxGain).toFixed(1);
   document.getElementById("engCost").textContent = "다음 " + fmt(cost);
   document.getElementById("engHave").textContent = "보유 " + fmt(S.riftBalance);
-  document.getElementById("engProg").style.width =
-    Math.min(100, (S.riftBalance / cost) * 100).toFixed(1) + "%";
+  document.getElementById("engProg").style.width = Math.min(100, (S.riftBalance / cost) * 100).toFixed(1) + "%";
 
-  document.getElementById("heroMult").textContent = "×" + hm.toFixed(2);
-  const intoStep = (smax - CFG.smaxInitial) % CFG.heroStepSmax;
-  document.getElementById("heroProg").style.width =
-    Math.max(0, Math.min(100, (intoStep / CFG.heroStepSmax) * 100)).toFixed(1) + "%";
-  document.getElementById("heroNote").textContent =
-    "다음 계단까지 " + Math.max(0, CFG.heroStepSmax - intoStep).toFixed(1);
-
-  const untilPr = Math.max(0, CFG.prestigeTargetH - (now - S.lastPrestigeT));
-  document.getElementById("prCount").textContent = S.prestigeCount + "회";
+  // 유물 탭
+  document.getElementById("relicTotal").textContent = fmt(S.totalRelics);
+  document.getElementById("relicCount").textContent = S.prestigeCount + "회 승급";
+  document.getElementById("relicFeed").textContent =
+    "+" + (CFG.relicFeedbackCoef * Math.log10(1 + S.totalRelics)).toFixed(1);
+  const untilPr = Math.max(0, CFG.prestigeTargetH - elapsed);
   document.getElementById("prProg").style.width =
     (((CFG.prestigeTargetH - untilPr) / CFG.prestigeTargetH) * 100).toFixed(1) + "%";
   document.getElementById("prNote").textContent =
-    untilPr <= 0 ? "다음 수령에서 승급한다" : "다음 승급까지 " + hoursLabel(untilPr);
+    untilPr <= 0 ? "다음 처치에서 승급한다" : "다음 승급까지 " + hoursLabel(untilPr);
+  document.getElementById("nextRelic").textContent = "+" + fmt(Math.max(0, relicsFor(stage)));
+  document.getElementById("nextRunNote").textContent =
+    `지금 끝내면 스테이지 ${stage.toFixed(1)} 기준`;
 
   // 계측 탭
   const l2 = gu > 0 ? S.riftUnits / gu : 0;
@@ -826,8 +836,8 @@ function render() {
 }
 function tag(v, lo, hi) {
   if (v === 0) return "";
-  if (v >= lo && v <= hi) return '<span class="tag ok">정상</span>';
-  return '<span class="tag bad">' + (v < lo ? "미달" : "초과") + "</span>";
+  return v >= lo && v <= hi ? '<span class="tag ok">정상</span>'
+    : '<span class="tag bad">' + (v < lo ? "미달" : "초과") + "</span>";
 }
 
 /* ── 저장 / 복원 ──────────────────────────────────────────────────── */
@@ -844,8 +854,8 @@ function load() {
     if (!d || !d.s) return false;
     S = d.s;
     if (typeof d.speed === "number") speed = d.speed;
-    // 자리를 비운 실제 시간만큼 게임 시간을 흘린다. 금화는 쌓이고 스택도
-    // 상한까지 차지만, 수령이 없으니 연쇄는 끊긴다 — 저빈도 플레이 그대로다.
+    // 자리를 비운 실제 시간만큼 게임 시간을 흘린다. 금화는 쌓이고 타이탄도
+    // 상한까지 응결하지만, 처치가 없으니 연쇄는 끊긴다 — 저빈도 플레이 그대로다.
     const awayH = Math.min(Math.max(0, (Date.now() - (d.at || Date.now())) / 1000) * speed, CFG.offlineCapH);
     if (awayH > 0.05) {
       advance(S.t + awayH);
@@ -874,16 +884,17 @@ function selfCheck() {
   t("신선도 2h = 0.90", freshness(1.01) === 0.90 && freshness(2.0) === 0.90);
   t("신선도 3h = 0.80", freshness(2.5) === 0.80);
   t("신선도 하한 0.70", freshness(3.01) === 0.70 && freshness(99) === 0.70);
-  t("영웅 배율 기본 1.00", near(heroMultOf(100), 1.0));
-  t("영웅 배율 +50 = 1.15", near(heroMultOf(150), 1.15));
-  t("영웅 배율 +100 = 1.15^2", near(heroMultOf(200), Math.pow(1.15, 2)));
+  t("영웅 0명 = ×1.00", heroCount(100) === 0 && near(heroMultOf(100), 1.0));
+  t("한계 150 = 영웅 1명", heroCount(150) === 1 && near(heroMultOf(150), 1.15));
+  t("한계 200 = 영웅 2명", heroCount(200) === 2 && near(heroMultOf(200), Math.pow(1.15, 2)));
   t("각인 비용 Lv0 = 40", near(engraveCost(0), 40));
   t("각인 비용 Lv1 = 43.2", near(engraveCost(1), 43.2));
-  const stage = 100 * (1 - Math.exp(-10 / 3));
-  t("유물 공식", near(relicsFor(100, 10, 3.0), 2.0 * Math.pow(1.02, stage - 50)));
+  // 회차 곡선: 10시간 · tau 3.0 · 한계 100 → 96.4에서 멈춘다
+  t("스테이지 곡선", near(stageAt(100, 10), 100 * (1 - Math.exp(-10 / 3))));
+  t("스테이지는 한계를 넘지 않는다", stageAt(100, 1e6) <= 100 + 1e-9);
+  t("유물 공식", near(relicsFor(stageAt(100, 10)), 2.0 * Math.pow(1.02, stageAt(100, 10) - 50)));
   t("연쇄 배율 5단 단조증가",
     CFG.chainMults.length === 5 && CFG.chainMults.every((m, i, a) => i === 0 || m > a[i - 1]));
-  // 확정안의 핵심 성질: 비례 지급이라 완주 전에도 보너스가 들어온다
   t("완주 보너스 비례 지급", CFG.chainBonusGraded === true);
   t("스택 만충이 연쇄 창보다 넓다 (알려진 구조적 모순)",
     CFG.stackCap * CFG.stackIntervalH > CFG.chainWindowH);
@@ -893,15 +904,14 @@ function selfCheck() {
 }
 
 /* ── 부팅 ─────────────────────────────────────────────────────────── */
+const TABS = { tabTitan: "viewTitan", tabHero: "viewHero", tabRelic: "viewRelic", tabGauge: "viewGauge" };
 function showTab(id) {
-  const map = { tabRift: "viewRift", tabForge: "viewForge", tabGauge: "viewGauge" };
-  for (const [tab, view] of Object.entries(map)) {
+  for (const [tab, view] of Object.entries(TABS)) {
     const on = tab === id;
     document.getElementById(tab).setAttribute("aria-selected", String(on));
     document.getElementById(view).hidden = !on;
   }
 }
-
 function start() {
   selfCheck();
   if (!load()) {
@@ -919,17 +929,14 @@ function start() {
   for (const tab of document.querySelectorAll('[role="tab"]')) {
     tab.addEventListener("click", () => showTab(tab.id));
   }
-  document.getElementById("riftBtn").addEventListener("click", (e) => { checkIn(e); save(); });
+  document.getElementById("titanBtn").addEventListener("click", (e) => { slay(e); save(); });
   document.getElementById("resetBtn").addEventListener("click", () => {
-    S = freshState();
-    logLine("기록을 지우고 다시 선다.");
-    save(); render();
+    S = freshState(); logLine("기록을 지우고 다시 선다."); save(); render();
   });
   window.addEventListener("beforeunload", save);
   setInterval(save, 5000);
   render();
   requestAnimationFrame(frame);
 }
-
 start();
 </script>
