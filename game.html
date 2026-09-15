@@ -70,6 +70,15 @@
   .hpbar span{position:absolute;inset:0;display:grid;place-items:center;font-size:11px;color:#fff;text-shadow:var(--stroke)}
   .timer{font-size:13px;color:var(--hp);margin-top:4px;min-height:19px}
   .timer.safe{color:var(--ink-3)}
+  .retry{
+    appearance:none;width:100%;margin-top:6px;border-radius:9px;cursor:pointer;
+    border:2px solid var(--hp);background:linear-gradient(180deg,#F05A52,#A02420);
+    color:#fff;font:400 15px/1.2 "Do Hyeon",sans-serif;padding:10px;
+    display:flex;justify-content:center;gap:8px;align-items:center;
+  }
+  .retry:hover{filter:brightness(1.08)}
+  .retry:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+  .retry .sub{font-size:12px;opacity:.85}
 
   .tapzone{
     flex:1;min-height:0;width:100%;display:grid;place-items:center;
@@ -331,6 +340,9 @@
       <div class="count" id="foeCount">1 / 10</div>
       <div class="hpbar" id="hpbar"><i style="width:100%"></i><span id="hpText">15 / 15</span></div>
       <div class="timer safe" id="timer">&nbsp;</div>
+      <button type="button" class="retry" id="retry" hidden>
+        <span>보스 재도전</span><span class="sub" id="retrySub">제한시간 30초</span>
+      </button>
     </div>
 
     <button type="button" class="tapzone" id="tapzone" aria-label="타이탄 공격">
@@ -628,7 +640,7 @@ let S, speed = 0.000278, paused = false, lastFrame = 0;   // 기본 실시간
 function freshState() {
   return {
     t: START_T,
-    stage: 1, mob: 1, hp: foeHP(1), bossLeft: 0,
+    stage: 1, mob: 1, hp: foeHP(1), bossLeft: 0, bossPending: false,
     gold: 0, goldEarned: 0,
     tapLv: 1, heroLv: HEROES.map(() => 0), mana: 0,
     totalRelics: 0, prestiges: 0, bestStage: 1,
@@ -645,7 +657,8 @@ const engraveMult = () => Math.pow(1.02, S.engraveLv);
 const permMult    = () => relicMult() * engraveMult() * S.blessingMult;
 const tapDamage   = () => (1 + S.tapLv) * permMult();
 const autoDps     = () => S.heroLv.reduce((a, lv, i) => a + heroDps(i, lv), 0) * permMult() * dpsBuff();
-const isBoss      = () => S.mob >= F.mobsPerStage;
+const atBossSlot  = () => S.mob >= F.mobsPerStage;
+const isBoss      = () => atBossSlot() && !S.bossPending;   // 교전 중인 보스
 const growthUnits = () => S.goldEarned + S.riftUnits;
 
 /* ── 전투 ─────────────────────────────────────────────────────────── */
@@ -653,16 +666,32 @@ function spawn() {
   S.hp = foeHP(S.stage) * (isBoss() ? F.bossMult : 1);
   S.bossLeft = isBoss() ? F.bossSeconds : 0;
 }
+// 보스를 놓쳐도 파편은 그대로 둔다. 9마리를 다시 잡게 하는 건 벌칙이 과하고,
+// 그동안 잡몹이 계속 나오므로 골드는 계속 벌 수 있다.
+function failBoss() {
+  S.bossPending = true;
+  S.bossLeft = 0;
+  spawn();                                  // 보스 대기 중에 나오는 잡몹
+  logLine(`보스를 놓쳤다 — 파편 ${F.mobsPerStage}/${F.mobsPerStage}은 그대로, 재도전 대기`);
+}
+function retryBoss() {
+  if (!S.bossPending) return;
+  S.bossPending = false;
+  S.mob = F.mobsPerStage;
+  spawn();
+  toast("보스 재도전");
+  save(); render();
+}
 function killReward(evt) {
   const g = foeGold(S.stage) * (isBoss() ? F.bossMult : 1) * S.blessingMult * goldBuff();
   S.gold += g; S.goldEarned += g;
   if (evt) pop(evt, "+" + fmt(g), "gold");
   if (isBoss()) {
-    S.stage += 1; S.mob = 1;
+    S.stage += 1; S.mob = 1; S.bossPending = false;
     if (S.stage > S.bestStage) S.bestStage = S.stage;
     if (S.stage % 25 === 0) logLine(`<b>스테이지 ${S.stage}</b> 도달`);
-  } else {
-    S.mob += 1;
+  } else if (!S.bossPending) {
+    S.mob += 1;                             // 보스 대기 중이면 10/10을 유지한다
   }
   spawn();
 }
@@ -696,10 +725,7 @@ function onTap(evt) {
 function bossTick(dtH) {
   if (!isBoss()) return;
   S.bossLeft -= dtH * 3600;
-  if (S.bossLeft <= 0) {
-    S.mob = 1; spawn();
-    logLine(`보스를 놓쳤다 — 스테이지 ${S.stage}에서 다시`);
-  }
+  if (S.bossLeft <= 0) failBoss();
 }
 
 /* ── 시간 ─────────────────────────────────────────────────────────── */
@@ -718,32 +744,38 @@ function advance(toT) {
   // 한 마리씩 처리해야 한다 — 누적 데미지로 한꺼번에 깎으면 보스가 뚫려 벽이 사라진다.
   let sec = dtH * 3600;
   const dps = autoDps();
-  let timeouts = 0, guard = 0;
-  while (sec > 0 && dps > 0 && guard++ < 600) {
-    const need = S.hp / dps;                 // 이 적을 잡는 데 걸리는 초
-    if (isBoss()) {
-      if (need > S.bossLeft) {               // 제한시간 안에 못 잡는다
-        if (sec < S.bossLeft) { S.bossLeft -= sec; S.hp -= dps * sec; sec = 0; break; }
-        sec -= S.bossLeft;
-        S.mob = 1; spawn();                  // 보스가 도망친다 — 일반 몹부터 다시
-        if (++timeouts >= 3) {
-          // 벽에 막혔다. 남은 시간은 한 사이클의 골드율로 근사한다
-          // (매 사이클을 그대로 돌리면 72시간 오프라인에 수천 번을 반복해야 한다).
-          const mobSec = foeHP(S.stage) / dps;
-          const cycleSec = F.bossSeconds + (F.mobsPerStage - 1) * mobSec;
-          const cycleGold = (F.mobsPerStage - 1) * foeGold(S.stage) * S.blessingMult;
-          const g = cycleGold / Math.max(1e-9, cycleSec) * sec;
-          S.gold += g; S.goldEarned += g;
+
+  // 보스 대기 중에는 진행이 멈춰 있고 잡몹만 계속 나온다. 한 마리씩 돌릴 이유가
+  // 없으므로(72시간 오프라인이면 수만 마리다) 초당 골드로 한 번에 계산한다.
+  const farm = (seconds) => {
+    if (dps <= 0 || seconds <= 0) return;
+    const g = dps / foeHP(S.stage) * foeGold(S.stage) * S.blessingMult * goldBuff() * seconds;
+    S.gold += g; S.goldEarned += g;
+  };
+
+  if (S.bossPending) {
+    farm(sec);
+    sec = 0;
+  } else {
+    let guard = 0;
+    while (sec > 0 && dps > 0 && guard++ < 600) {
+      const need = S.hp / dps;               // 이 적을 잡는 데 걸리는 초
+      if (isBoss()) {
+        if (need > S.bossLeft) {             // 제한시간 안에 못 잡는다
+          if (sec < S.bossLeft) { S.bossLeft -= sec; S.hp -= dps * sec; sec = 0; break; }
+          sec -= S.bossLeft;
+          failBoss();                        // 파편은 유지, 재도전 대기로
+          farm(sec);                         // 남은 시간은 잡몹 파밍
           sec = 0;
+          break;
         }
-        continue;
+        S.bossLeft -= need;
       }
-      S.bossLeft -= need;
+      if (need > sec) { S.hp -= dps * sec; sec = 0; break; }
+      sec -= need;
+      S.hp = 0;
+      killReward(null);
     }
-    if (need > sec) { S.hp -= dps * sec; sec = 0; break; }
-    sec -= need;
-    S.hp = 0;
-    killReward(null);
   }
   if (dps <= 0) bossTick(dtH);               // 영웅이 없으면 타이머만 흐른다
 
@@ -914,16 +946,23 @@ function render() {
 
   // 적
   const maxHp = foeHP(S.stage) * (boss ? F.bossMult : 1);
+  const tier = FOES[Math.min(4, Math.floor(S.stage / 25))];
   const foeName = document.getElementById("foeName");
-  foeName.textContent = boss ? "보스 · " + FOES[Math.min(4, Math.floor(S.stage/25))] : FOES[Math.min(4, Math.floor(S.stage/25))];
+  foeName.textContent = boss ? "보스 · " + tier : tier;
   foeName.className = "name" + (boss ? " boss" : "");
-  document.getElementById("foeCount").textContent = boss ? "보스전" : `${S.mob} / ${F.mobsPerStage}`;
+  document.getElementById("foeCount").textContent = boss ? "보스전"
+    : S.bossPending ? `${F.mobsPerStage} / ${F.mobsPerStage} · 보스 대기`
+    : `${S.mob} / ${F.mobsPerStage}`;
+  const rb = document.getElementById("retry");
+  rb.hidden = !S.bossPending;
+  if (S.bossPending) document.getElementById("retrySub").textContent = `제한시간 ${F.bossSeconds}초`;
   const hb = document.getElementById("hpbar");
   hb.classList.toggle("boss", boss);
   hb.querySelector("i").style.width = Math.max(0, Math.min(100, (S.hp / maxHp) * 100)).toFixed(1) + "%";
   document.getElementById("hpText").textContent = fmt(Math.max(0, S.hp)) + " / " + fmt(maxHp);
   const tm = document.getElementById("timer");
   if (boss) { tm.className = "timer"; tm.textContent = "남은 시간 " + Math.max(0, S.bossLeft).toFixed(1) + "초"; }
+  else if (S.bossPending) { tm.className = "timer safe"; tm.textContent = "잡몹을 잡으며 화력을 모은다"; }
   else { tm.className = "timer safe"; tm.innerHTML = "&nbsp;"; }
 
   const tz = document.getElementById("tapzone");
@@ -1127,7 +1166,8 @@ function load() {
     const d = JSON.parse(raw);
     if (!d?.s) return false;
     S = d.s;
-    if (typeof S.mana !== "number") S.mana = 0;   // 마나 도입 이전 저장본
+    if (typeof S.mana !== "number") S.mana = 0;          // 마나 도입 이전 저장본
+    if (typeof S.bossPending !== "boolean") S.bossPending = false;
     if (typeof d.speed === "number") speed = d.speed;
     // 자리를 비운 동안에도 영웅은 싸우고 균열은 맺힌다. 수령이 없으니 연쇄만 끊긴다.
     const away = Math.min(Math.max(0, (Date.now() - (d.at || Date.now())) / 1000) * speed, CFG.offlineCapH);
@@ -1189,6 +1229,15 @@ function selfCheck() {
   t("보스 HP가 일반 몹보다 크다", F.bossMult > 1);
   t("스테이지가 오를수록 적이 강해진다", foeHP(2) > foeHP(1));
   t("보스는 제한시간이 있다", F.bossSeconds > 0);
+  t("보스 슬롯에서 대기 중이면 교전 중이 아니다", (() => {
+      const keep = [S.mob, S.bossPending];
+      S.mob = F.mobsPerStage; S.bossPending = true;
+      const ok = atBossSlot() && !isBoss();
+      S.bossPending = false;
+      const ok2 = atBossSlot() && isBoss();
+      [S.mob, S.bossPending] = keep;
+      return ok && ok2;
+    })());
 
   // 타이밍 — 연타보다 정확한 한 방이 이득이어야 한다
   t("퍼펙트가 굿보다, 굿이 미스보다 세다",
@@ -1262,6 +1311,7 @@ function start() {
   document.getElementById("tapBuy").addEventListener("click", buyTap);
   document.getElementById("collect").addEventListener("click", (e) => { collect(e); save(); });
   document.getElementById("prestige").addEventListener("click", prestige);
+  document.getElementById("retry").addEventListener("click", retryBoss);
   document.getElementById("resetBtn").addEventListener("click", () => {
     S = freshState(); spawn(); logLine("기록을 지우고 다시 선다."); save(); render();
   });
