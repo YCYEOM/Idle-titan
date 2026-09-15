@@ -202,6 +202,49 @@ PERSONA_RETENTION: Dict[str, RetentionCurve] = {
 
 
 # ============================================================
+# 2c. 설계 불변식 검증
+# ============================================================
+
+
+def validate_config(cfg: Config, verbose: bool = True) -> List[str]:
+    """설계가 조용히 모순에 빠지는 조합을 기동 시 경고한다.
+
+    ★ 핵심 불변식: chain_window_h >= stack_cap * stack_interval_h
+      스택 만충에 걸리는 시간보다 연쇄 창이 좁으면, 2층(스택)은 '분산 체크인'을
+      연쇄는 '밀집 체크인'을 요구하게 되어 유저가 양쪽을 동시에 만족시킬 수 없다.
+      두 값이 독립 파라미터라 stack_cap을 올리는 것만으로 모순이 재발할 수 있어
+      기동 시마다 검사한다.
+    """
+    warns: List[str] = []
+    fill_h = cfg.stack_cap * cfg.stack_interval_h
+    if cfg.chain_window_h < fill_h:
+        warns.append(
+            f"연쇄 창({cfg.chain_window_h:.2f}h) < 스택 만충({fill_h:.2f}h "
+            f"= {cfg.stack_cap} x {cfg.stack_interval_h*60:.0f}분) → 2층은 분산을, "
+            f"연쇄는 밀집을 요구하는 구조적 모순. 저빈도 유저는 연쇄에서 배제된다."
+        )
+    if cfg.chain_daily_cap > len(cfg.chain_mults):
+        warns.append(
+            f"chain_daily_cap({cfg.chain_daily_cap}) > chain_mults 길이"
+            f"({len(cfg.chain_mults)}) → 상한 근처 연쇄가 마지막 배율로 고정된다."
+        )
+    if not (0.0 < cfg.freshness_floor <= 1.0):
+        warns.append(f"freshness_floor({cfg.freshness_floor})가 (0,1] 범위 밖")
+    if cfg.onboarding_chain_window_h > 0.0 and cfg.onboarding_chain_window_h < fill_h:
+        warns.append(
+            f"온보딩 연쇄 창({cfg.onboarding_chain_window_h:.2f}h) < 스택 만충"
+            f"({fill_h:.2f}h) → 온보딩 예외로도 모순이 해소되지 않는다."
+        )
+    if verbose and warns:
+        print(BAR)
+        print(" ⚠ 설계 불변식 경고")
+        for w in warns:
+            print(f"   · {w}")
+        print(BAR)
+    return warns
+
+
+# ============================================================
 # 3. 시뮬레이션 엔진
 # ============================================================
 
@@ -229,6 +272,8 @@ class Player:
         self.gold_units = 0.0
 
         self.stacks: List[float] = []   # 각 스택의 '생성 시각' 기억
+        self.stacks_collected = 0       # 누적 수거 스택 수(진단용)
+        self.collect_events = 0         # 수거 횟수(진단용)
         self.next_stack_t = cfg.stack_interval_h
 
         self.last_collect_t = -999.0
@@ -307,6 +352,8 @@ class Player:
             return
 
         # 신선도 적용
+        self.stacks_collected += len(self.stacks)
+        self.collect_events += 1
         raw = sum(self.cfg.stack_base * self.freshness(now - born) for born in self.stacks)
         raw *= self.onboarding_boost()   # ③ 초반 부스트
 
@@ -2053,6 +2100,302 @@ def diagnose_d_chain_exposure(
 
 
 # ============================================================
+# 5p. 통합 후보 검증 — C안(비례보너스) + D안(온보딩 연쇄창)
+# ============================================================
+
+# C안: 완주 보너스를 단계별 비례 지급 (번아웃 +2.4%p로 최저)
+# D안: 온보딩 기간 한정 연쇄 창 확대 (D형을 핵심 루프에 편입)
+INTEGRATED_C = {"chain_bonus_graded": True, "chain_complete_bonus": 314.0}
+INTEGRATED_D = {"onboarding_chain_window_h": 3.5}
+D_ONBOARD_SCHEDULE: List[float] = [8.0, 11.0, 14.0, 17.0]
+
+
+def verify_integrated_candidate(
+    cfg: Config, sensitivity: float = 1.1, days: int = 30, trials: int = 60,
+    burn_days: int = 60, burn_trials: int = 100, seed0: int = 1,
+) -> List[Dict[str, object]]:
+    """C안·D안을 따로/함께 적용했을 때의 상호작용을 4제약으로 최종 검증.
+
+    두 수정은 독립적으로 검증되었을 뿐이다. C안은 연쇄 보상 총액을 키우고
+    D안은 D형이 연쇄를 경험하게 만들므로, 함께 적용하면 D형이 받는 연쇄 보상이
+    곱으로 커져 예상 밖의 편차가 생길 수 있다. 여기서 그 상호작용을 측정한다.
+    """
+    print("\n" + BAR)
+    print(f" 통합 후보 검증 (C안 × D안) | 밸런스 {days}일×{trials}회 / "
+          f"번아웃 {burn_days}일×{burn_trials}회 (s={sensitivity})")
+    print(BAR)
+
+    variants = {
+        "현행": {},
+        "C안 단독(비례보너스)": dict(INTEGRATED_C),
+        "D안 단독(온보딩 연쇄창)": dict(INTEGRATED_D),
+        "C+D 통합": {**INTEGRATED_C, **INTEGRATED_D},
+    }
+    base_cfg = replace(cfg, burnout_sensitivity=sensitivity,
+                       burnout_ref_mode="relative")
+    base_loss = _burnout_active_loss(base_cfg, None, burn_days, burn_trials,
+                                     seed0, persona="B_타깃")
+
+    b7 = statistics.fmean([growth_units(simulate(cfg, "B_타깃", 7, seed0 + k * 7919), cfg)
+                           for k in range(trials)])
+
+    print(f"{'후보':<22}{'B/A':>8}{'연쇄':>7}{'2층':>7}{'번아웃':>9}"
+          f"{'C/A':>7}{'D연쇄/일':>9}{'D7진도':>8}")
+    print("-" * 76)
+    rows: List[Dict[str, object]] = []
+    for label, kw in variants.items():
+        c = replace(cfg, **kw) if kw else cfg
+        ratio, chain, l2 = _metrics_3(c, days, trials, seed0)
+        cb = replace(c, burnout_sensitivity=sensitivity, burnout_ref_mode="relative")
+        loss = _burnout_active_loss(cb, None, burn_days, burn_trials, seed0,
+                                    persona="B_타깃")
+        delta = loss - base_loss
+        # 헤비 밸런스
+        cu = statistics.fmean([growth_units(simulate(c, "C_헤비", days, seed0 + k * 7919), c)
+                               for k in range(max(30, trials // 2))])
+        au = statistics.fmean([growth_units(simulate(c, "A_저빈도", days, seed0 + k * 7919), c)
+                               for k in range(max(30, trials // 2))])
+        ca = cu / max(1e-9, au)
+        # D형: 권장 3h 간격 스케줄 기준
+        dev, dd7 = [], []
+        for k in range(trials):
+            p = simulate(c, "D_쇼츠유입", days, seed0 + k * 7919,
+                         schedule=D_ONBOARD_SCHEDULE)
+            dev.append(p.chain_events / days)
+            p7 = simulate(c, "D_쇼츠유입", 7, seed0 + k * 7919,
+                          schedule=D_ONBOARD_SCHEDULE)
+            dd7.append(growth_units(p7, c))
+        m_dev = statistics.fmean(dev)
+        m_d7 = statistics.fmean(dd7) / max(1e-9, b7)
+        ok = (BA_LO <= ratio <= BA_HI and CHAIN_LO <= chain <= CHAIN_HI
+              and L2_LO <= l2 <= L2_HI and delta <= BURNOUT_SAFE_LOSS and ca <= 2.20)
+        rows.append({"label": label, "ratio": ratio, "chain": chain, "l2": l2,
+                     "delta": delta, "ca": ca, "d_chain": m_dev, "d7": m_d7,
+                     "valid": ok})
+        print(f"{label:<22}{ratio:>8.3f}{chain*100:>6.1f}%{l2*100:>6.1f}%"
+              f"{delta*100:>+8.1f}%p{ca:>7.2f}{m_dev:>9.2f}{m_d7*100:>7.1f}%")
+    print("-" * 76)
+
+    cur, c_only, d_only, both = rows
+    # 상호작용: 통합 효과가 단독 효과의 합과 얼마나 다른가 (연쇄기여 기준)
+    add_pred = (c_only["chain"] - cur["chain"]) + (d_only["chain"] - cur["chain"])
+    actual = both["chain"] - cur["chain"]
+    print(f" 연쇄기여 상호작용: 단독 합 {add_pred*100:+.1f}%p vs 통합 실측 "
+          f"{actual*100:+.1f}%p → 편차 {(actual-add_pred)*100:+.1f}%p")
+    print(f" D형 핵심 루프 편입: 현행 {cur['d_chain']:.2f}회/일 → 통합 "
+          f"{both['d_chain']:.2f}회/일, D7 진도 {cur['d7']*100:.1f}% → {both['d7']*100:.1f}%")
+    print(" 4제약+헤비 판정: " + " / ".join(
+        f"{r['label'].split()[0]} {'✓' if r['valid'] else '✗'}" for r in rows))
+    if both["valid"]:
+        print(" → C+D 통합안은 밸런스 3제약·번아웃·헤비 경고선을 모두 통과한다.")
+    else:
+        fails = []
+        if not (BA_LO <= both["ratio"] <= BA_HI):
+            fails.append(f"B/A {both['ratio']:.3f}")
+        if not (CHAIN_LO <= both["chain"] <= CHAIN_HI):
+            fails.append(f"연쇄 {both['chain']*100:.1f}%")
+        if not (L2_LO <= both["l2"] <= L2_HI):
+            fails.append(f"2층 {both['l2']*100:.1f}%")
+        if both["delta"] > BURNOUT_SAFE_LOSS:
+            fails.append(f"번아웃 {both['delta']*100:+.1f}%p")
+        if both["ca"] > 2.20:
+            fails.append(f"C/A {both['ca']:.2f}")
+        print(f" → 통합안 미충족 항목: {', '.join(fails)}")
+        print("   (C안의 보너스 크기는 연쇄기여 10% 타깃에 맞춰 재보정해야 한다)")
+    print(BAR)
+    return rows
+
+
+# ============================================================
+# 5q. stack_cap 실효성 진단 — B형은 상한을 쓰는가
+# ============================================================
+
+
+def diagnose_stack_cap_usage(
+    cfg: Config, days: int = 30, trials: int = 150, seed0: int = 1,
+) -> List[Dict[str, object]]:
+    """각 페르소나가 스택 상한(stack_cap)을 실제로 활용하는지 진단.
+
+    B형 체크인 간격은 1.0~1.33h로 스택 생성 간격(55분)보다 겨우 넓다.
+    즉 수거할 때마다 스택이 1개뿐이라면, B형에게 stack_cap=3은 사문화된 값이며
+    '연쇄를 얻는 대신 스택을 포기한' 트레이드오프가 암묵적으로 강제된 것이다.
+    상한을 바꿔가며 어느 페르소나가 실제로 영향을 받는지 측정한다.
+    """
+    print("\n" + BAR)
+    print(f" stack_cap 실효성 진단 | {days}일 × {trials}회 | "
+          f"상한={cfg.stack_cap}, 생성간격={cfg.stack_interval_h*60:.0f}분")
+    print(BAR)
+    print(f"{'페르소나':<12}{'최소간격':>9}{'수거당 스택':>12}{'상한 활용률':>12}"
+          f"{'수거/일':>9}")
+    print("-" * 76)
+    rows: List[Dict[str, object]] = []
+    for name, sched in PERSONAS.items():
+        gaps = [sched[i + 1] - sched[i] for i in range(len(sched) - 1)]
+        min_gap = min(gaps) if gaps else float("nan")
+        per, ev = [], []
+        for k in range(trials):
+            p = simulate(cfg, name, days, seed0 + k * 7919)
+            if p.collect_events:
+                per.append(p.stacks_collected / p.collect_events)
+                ev.append(p.collect_events / days)
+        m_per = statistics.fmean(per) if per else 0.0
+        util = m_per / max(1e-9, cfg.stack_cap)
+        rows.append({"name": name, "min_gap": min_gap, "per_collect": m_per,
+                     "util": util, "collects": statistics.fmean(ev) if ev else 0.0})
+        print(f"{name:<12}{min_gap:>8.2f}h{m_per:>12.2f}{util*100:>11.0f}%"
+              f"{statistics.fmean(ev) if ev else 0:>9.2f}")
+    print("-" * 76)
+
+    # 상한을 바꿨을 때 누가 실제로 영향을 받는가
+    caps = (1, 2, 3, 5)
+    print(f"\n stack_cap 변경 시 성장단위 변화 (상한 {cfg.stack_cap} 기준 대비)")
+    print(f"{'페르소나':<12}" + "".join(f"{'cap=%d' % c:>12}" for c in caps))
+    print("-" * 76)
+    sens: Dict[str, List[float]] = {}
+    for name in PERSONAS:
+        vals = []
+        for cap in caps:
+            c = replace(cfg, stack_cap=cap)
+            u = statistics.fmean([growth_units(simulate(c, name, days, seed0 + k * 7919), c)
+                                  for k in range(max(40, trials // 3))])
+            vals.append(u)
+        sens[name] = vals
+        ref = vals[caps.index(cfg.stack_cap)]
+        print(f"{name:<12}" + "".join(f"{v/ref-1:>+11.1%}" for v in vals))
+    print("-" * 76)
+
+    b = sens["B_타깃"]
+    a = sens["A_저빈도"]
+    b_span = (max(b) - min(b)) / max(1e-9, min(b))
+    a_span = (max(a) - min(a)) / max(1e-9, min(a))
+    b_row = next(r for r in rows if r["name"] == "B_타깃")
+    print(f" B형: 수거당 스택 {b_row['per_collect']:.2f}개 "
+          f"(상한 {cfg.stack_cap}의 {b_row['util']*100:.0f}%) → "
+          f"cap 1~5 전 구간 성장 변동 {b_span*100:.1f}%")
+    print(f" A형: cap 1~5 전 구간 성장 변동 {a_span*100:.1f}%")
+    if b_span < 0.02:
+        print(" → B형에게 stack_cap은 사실상 사문화된 파라미터다. 타깃 유저는")
+        print("   연쇄를 얻는 대가로 스택 축적을 포기한 상태이며, 이 트레이드오프는")
+        print("   설계 의도라기보다 두 층의 시간 창이 충돌한 결과로 보인다.")
+        print("   → stack_cap 상향은 B형에 아무 영향이 없고 저빈도(A)만 이롭게 하므로,")
+        print("     B/A 비율을 낮추는 노브로만 기능한다는 점을 유의해야 한다.")
+    else:
+        low = min(rows, key=lambda r: r["util"])
+        high = max(rows, key=lambda r: r["util"])
+        print(f" → B형도 상한의 영향을 받는다(사문화 아님). 가설 기각.")
+        print(f" 실제 구조: 활용률 최저는 {low['name']}({low['util']*100:.0f}%), "
+              f"최고는 {high['name']}({high['util']*100:.0f}%).")
+        print("   체크인이 잦을수록 스택이 덜 찬 상태로 수거해 상한을 낭비한다.")
+        c5 = sens["C_헤비"][caps.index(5)] / sens["C_헤비"][caps.index(cfg.stack_cap)] - 1
+        b5 = sens["B_타깃"][caps.index(5)] / sens["B_타깃"][caps.index(cfg.stack_cap)] - 1
+        a5 = sens["A_저빈도"][caps.index(5)] / sens["A_저빈도"][caps.index(cfg.stack_cap)] - 1
+        print(f"   → stack_cap 상향(3→5) 효과: A {a5:+.1%} / B {b5:+.1%} / C {c5:+.1%}")
+        print("     헤비가 가장 덜 이롭다 = stack_cap은 C/A를 억제하는 '헤비 제동' 노브다.")
+        print("     상한을 올리면 저·중빈도가 더 크게 이득을 보아 격차가 좁혀진다.")
+    print(BAR)
+    return rows
+
+
+# ============================================================
+# 5r. 최종 권장안 — 5제약 동시 만족 구성
+# ============================================================
+
+# 탐색으로 확정한 권장 오버라이드.
+#   · chain_bonus_graded + chain_complete_bonus : C안(비례 지급). 연쇄기여를
+#     확보하되 all-or-nothing 변동성을 없애 번아웃을 억제한다.
+#   · onboarding_chain_window_h : D안. 온보딩 한정 연쇄 창 확대로 저빈도 신규
+#     유저를 핵심 루프에 편입시킨다(전역 확대는 C/A를 2.96으로 파괴).
+#   · stack_cap 3→5 : C안이 유발한 C/A 상승(1.96→2.39)을 되돌리는 헤비 제동.
+#     상한 상향은 헤비(+6%)보다 저·중빈도(+21~22%)에 훨씬 이롭기 때문이다.
+#   · gold_per_hour 100→130 : stack_cap 상향으로 부푼 2층 비중을 권장대로 복원.
+RECOMMENDED_OVERRIDES: Dict[str, object] = {
+    "stack_cap": 5,
+    "chain_bonus_graded": True,
+    "chain_complete_bonus": 440.0,
+    "gold_per_hour": 130.0,
+    # 만충 시간(stack_cap x interval = 4.58h)에 맞춰 설정. 이보다 좁으면 온보딩
+    # 예외로도 모순이 남는다(불변식 검사가 잡아낸다).
+    "onboarding_chain_window_h": 4.6,
+}
+
+
+def recommended_config(cfg: Optional[Config] = None) -> Config:
+    return replace(cfg or Config(), **RECOMMENDED_OVERRIDES)
+
+
+def verify_recommended(
+    cfg: Optional[Config] = None, sensitivity: float = 1.1,
+    days: int = 30, trials: int = 80, burn_days: int = 60, burn_trials: int = 100,
+    seed0: int = 1,
+) -> Dict[str, object]:
+    """권장안을 5개 제약으로 최종 검증하고 현행과 나란히 비교한다."""
+    cur = cfg or Config()
+    rec = recommended_config(cur)
+
+    print("\n" + BAR)
+    print(f" 최종 권장안 검증 | 밸런스 {days}일×{trials}회 / 번아웃 {burn_days}일×{burn_trials}회")
+    print(BAR)
+    print(" 변경점: " + ", ".join(f"{k}={v}" for k, v in RECOMMENDED_OVERRIDES.items()))
+    warns = validate_config(rec, verbose=False)
+    print(f" 설계 불변식: {'✓ 통과' if not warns else '⚠ ' + warns[0][:60]}")
+    print("-" * 76)
+
+    def measure(c: Config) -> Dict[str, float]:
+        ratio, chain, l2 = _metrics_3(c, days, trials, seed0)
+        cu = statistics.fmean([growth_units(simulate(c, "C_헤비", days, seed0 + k * 7919), c)
+                               for k in range(max(40, trials // 2))])
+        au = statistics.fmean([growth_units(simulate(c, "A_저빈도", days, seed0 + k * 7919), c)
+                               for k in range(max(40, trials // 2))])
+        cb = replace(c, burnout_sensitivity=sensitivity, burnout_ref_mode="relative")
+        loss = _burnout_active_loss(cb, None, burn_days, burn_trials, seed0,
+                                    persona="B_타깃")
+        b7 = statistics.fmean([growth_units(simulate(c, "B_타깃", 7, seed0 + k * 7919), c)
+                               for k in range(trials)])
+        dch, dd7 = [], []
+        for k in range(trials):
+            p = simulate(c, "D_쇼츠유입", days, seed0 + k * 7919,
+                         schedule=D_ONBOARD_SCHEDULE)
+            dch.append(p.chain_events / days)
+            p7 = simulate(c, "D_쇼츠유입", 7, seed0 + k * 7919,
+                          schedule=D_ONBOARD_SCHEDULE)
+            dd7.append(growth_units(p7, c))
+        return {"ratio": ratio, "chain": chain, "l2": l2, "ca": cu / max(1e-9, au),
+                "loss": loss, "d_chain": statistics.fmean(dch),
+                "d7": statistics.fmean(dd7) / max(1e-9, b7)}
+
+    m_cur, m_rec = measure(cur), measure(rec)
+    delta = m_rec["loss"] - m_cur["loss"]
+
+    checks = [
+        ("B/A 비율", m_cur["ratio"], m_rec["ratio"], BA_LO, BA_HI, "{:.3f}"),
+        ("연쇄 기여", m_cur["chain"], m_rec["chain"], CHAIN_LO, CHAIN_HI, "{:.1%}"),
+        ("2층 비중", m_cur["l2"], m_rec["l2"], L2_LO, L2_HI, "{:.1%}"),
+        ("C/A 비율", m_cur["ca"], m_rec["ca"], 0.0, 2.20, "{:.3f}"),
+        ("번아웃 증분", 0.0, delta, -1.0, BURNOUT_SAFE_LOSS, "{:+.1%}"),
+    ]
+    print(f"{'제약':<12}{'현행':>12}{'권장안':>12}{'허용 구간':>20}{'판정':>8}")
+    print("-" * 76)
+    all_ok = True
+    for name, v0, v1, lo, hi, fmt in checks:
+        ok = lo <= v1 <= hi
+        all_ok = all_ok and ok
+        band = f"[{fmt.format(lo)}, {fmt.format(hi)}]" if lo > -1 else f"≤ {fmt.format(hi)}"
+        print(f"{name:<12}{fmt.format(v0):>12}{fmt.format(v1):>12}{band:>20}"
+              f"{'✓' if ok else '✗':>7}")
+    print("-" * 76)
+    print(f"{'D형 연쇄/일':<12}{m_cur['d_chain']:>12.2f}{m_rec['d_chain']:>12.2f}"
+          f"{'핵심 루프 편입':>20}{'✓' if m_rec['d_chain'] > 0 else '✗':>7}")
+    print(f"{'D7 진도':<12}{m_cur['d7']:>11.1%}{m_rec['d7']:>12.1%}"
+          f"{'B형 대비 80%+':>20}{'✓' if m_rec['d7'] >= 0.80 else '✗':>7}")
+    print("-" * 76)
+    print(f" 종합: {'✓ 5제약 + D형 목표 모두 충족' if all_ok else '✗ 미충족 제약 있음'}")
+    print(" ※ 번아웃 관련 판정은 민감도 s=1.1 가정에 의존한다(미식별 구간 [2.8,6.4]).")
+    print("   보상강도 2개 운영점의 리텐션 A/B 실측으로만 확정 가능하다.")
+    print(BAR)
+    return {"current": m_cur, "recommended": m_rec, "all_ok": all_ok}
+
+
+# ============================================================
 # 6. 엔트리포인트
 # ============================================================
 
@@ -2096,6 +2439,12 @@ def main() -> None:
                     help="연쇄 보상 형태 비교 (상시 배율 vs 완주 보너스)")
     ap.add_argument("--attach-threshold", action="store_true",
                     help="애착 계수 부호반전 임계값 역산")
+    ap.add_argument("--recommended", action="store_true",
+                    help="최종 권장안(5제약 동시 만족) 검증")
+    ap.add_argument("--integrated", action="store_true",
+                    help="C안+D안 통합 후보를 4제약으로 최종 검증")
+    ap.add_argument("--diagnose-stack", action="store_true",
+                    help="stack_cap 실효성 진단 (B형 사문화 여부)")
     ap.add_argument("--diagnose-d", action="store_true",
                     help="D형 연쇄 노출 진단 + 대안 스케줄 비교")
     ap.add_argument("--verify-d7-link", action="store_true",
@@ -2111,6 +2460,7 @@ def main() -> None:
     if args.ref_mode != "absolute" or args.attachment > 0.0:
         cfg = replace(cfg, burnout_ref_mode=args.ref_mode,
                       burnout_attachment_coef=args.attachment)
+    validate_config(cfg)
     res = run_batch(cfg, args.days, args.trials)
     report(cfg, res, args.days, args.trials)
 
@@ -2175,6 +2525,21 @@ def main() -> None:
         find_attachment_threshold(cfg, SHORTS_RETENTION, args.fit_sensitivity,
                                   days=args.longterm_days,
                                   trials=max(150, args.trials))
+
+    if args.recommended:
+        verify_recommended(cfg, sensitivity=args.fit_sensitivity,
+                           days=args.grid_days, trials=args.grid_trials,
+                           burn_days=args.longterm_days,
+                           burn_trials=max(80, args.trials // 2))
+
+    if args.integrated:
+        verify_integrated_candidate(cfg, sensitivity=args.fit_sensitivity,
+                                    days=args.grid_days, trials=args.grid_trials,
+                                    burn_days=args.longterm_days,
+                                    burn_trials=max(80, args.trials // 2))
+
+    if args.diagnose_stack:
+        diagnose_stack_cap_usage(cfg, days=args.days, trials=args.trials)
 
     if args.diagnose_d:
         diagnose_d_chain_exposure(cfg, days=args.days, trials=args.trials)
