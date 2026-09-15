@@ -14,6 +14,7 @@
     --stroke:0 2px 0 #1A0F33,0 -1px 0 #1A0F33,1px 0 0 #1A0F33,-1px 0 0 #1A0F33;
   }
   *{box-sizing:border-box}
+  [hidden]{display:none!important}
   html,body{height:100%}
   body{
     margin:0;background:var(--deep);color:var(--ink);
@@ -55,7 +56,7 @@
   .arena{
     position:relative;min-height:0;overflow:hidden;
     display:flex;flex-direction:column;align-items:center;justify-content:space-between;
-    padding:10px 14px 12px;gap:8px;
+    padding:8px 14px 10px;gap:6px;
   }
   .foe{text-align:center;width:100%}
   .foe .name{font-size:17px;text-shadow:var(--stroke)}
@@ -81,32 +82,44 @@
   .retry .sub{font-size:12px;opacity:.85}
 
   .tapzone{
-    flex:1;min-height:0;width:100%;
+    flex:1;min-height:150px;overflow:hidden;width:100%;
     appearance:none;border:0;background:none;padding:0;cursor:pointer;
     touch-action:manipulation;user-select:none;
-    display:flex;align-items:flex-end;justify-content:space-between;gap:6px;
-    position:relative;
+    display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+    gap:4px;position:relative;
   }
   .tapzone:focus-visible{outline:3px solid var(--gold);outline-offset:-6px;border-radius:14px}
-  /* 발밑 지면 — 대열과 타이탄이 같은 바닥에 서 있어 보이게 한다 */
+  /* 발밑 지면 — 주인공과 영웅들이 같은 바닥에 서 있어 보이게 한다 */
   .tapzone::after{
-    content:"";position:absolute;left:0;right:0;bottom:6px;height:2px;
-    background:linear-gradient(90deg,transparent,rgba(120,100,180,.5) 18%,rgba(120,100,180,.5) 82%,transparent);
+    content:"";position:absolute;left:0;right:0;bottom:8px;height:2px;
+    background:linear-gradient(90deg,transparent,rgba(120,100,180,.5) 14%,rgba(120,100,180,.5) 86%,transparent);
   }
-  .titanwrap{flex:none;position:relative;padding-bottom:8px}
-  .titanwrap svg{width:min(44vw,164px);height:auto;display:block;filter:drop-shadow(0 6px 18px rgba(224,52,46,.3))}
+  .titanwrap{
+    flex:1 1 auto;min-height:0;width:100%;position:relative;
+    display:flex;align-items:flex-end;justify-content:center;
+  }
+  .titanwrap svg{
+    height:100%;width:auto;max-width:min(40vw,150px);max-height:150px;display:block;
+    filter:drop-shadow(0 6px 18px rgba(224,52,46,.3));
+  }
   .tapzone.hit .titanwrap svg{animation:shake .18s ease}
 
-  /* 아군 대열 — 고용할수록 한 명씩 늘어선다 */
-  .party{
-    flex:1;min-width:0;display:flex;align-items:flex-end;justify-content:flex-start;
-    padding-bottom:8px;padding-left:2px;
+  /* 대열: 가운데 주인공, 좌우로 영웅이 갈라져 바깥으로 늘어난다 */
+  .ranks{
+    flex:none;width:100%;display:flex;align-items:flex-end;justify-content:center;
+    padding-bottom:4px;
   }
+  .side{display:flex;align-items:flex-end;flex:1;min-width:0}
+  .side.left{justify-content:flex-end}
+  .side.right{justify-content:flex-start}
+  .side .fighter{margin:0 -7px}
+  /* 오른쪽 열은 좌우를 뒤집어 안쪽을 보게 한다 */
+  .side.right .fighter svg{transform:scaleX(-1)}
   .fighter{
-    flex:none;width:34px;margin-right:-11px;position:relative;
+    flex:none;width:32px;position:relative;
     animation:bob 1.8s ease-in-out infinite;
   }
-  .fighter.master{width:40px;margin-right:-8px;z-index:9}
+  .fighter.master{width:42px;margin:0 2px;z-index:9}
   .fighter svg{width:100%;height:auto;display:block}
   .fighter.atk{animation:lunge .9s ease-in-out infinite}
   @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}
@@ -119,7 +132,7 @@
 
   .timing{width:100%}
   .tbar{
-    position:relative;height:26px;width:100%;
+    position:relative;height:22px;width:100%;
     border:2px solid #1A0F33;border-radius:8px;background:#1B1038;overflow:hidden;
   }
   .tbar .zone{position:absolute;top:0;bottom:0;display:block}
@@ -129,7 +142,7 @@
     position:absolute;top:-2px;bottom:-2px;width:5px;margin-left:-2.5px;
     background:var(--ink);border-radius:3px;box-shadow:0 0 8px rgba(255,246,224,.7);
   }
-  .thint{text-align:center;font-size:12px;color:var(--ink-3);margin-top:4px;min-height:18px}
+  .thint{text-align:center;font-size:12px;color:var(--ink-3);margin-top:3px;min-height:16px}
   .thint b{font-weight:400}
   .thint b.p{color:var(--gold)} .thint b.g{color:var(--go)} .thint b.m{color:var(--ink-3)}
 
@@ -145,7 +158,7 @@
   .skill{
     appearance:none;cursor:pointer;color:var(--ink);font:inherit;position:relative;
     background:var(--raise);border:2px solid var(--edge);border-radius:8px;
-    padding:6px 2px 5px;display:flex;flex-direction:column;align-items:center;gap:2px;overflow:hidden;
+    padding:5px 2px 4px;display:flex;flex-direction:column;align-items:center;gap:2px;overflow:hidden;
   }
   .skill .ic{font-size:16px;line-height:1}
   .skill .nm{font-size:10px;line-height:1.1;text-align:center;color:var(--ink-2)}
@@ -173,7 +186,7 @@
   .buy{
     appearance:none;width:100%;border-radius:9px;cursor:pointer;
     border:2px solid var(--go);background:linear-gradient(180deg,#5BD75B,var(--go-d));
-    color:#06240A;font:400 15px/1.2 "Do Hyeon",sans-serif;padding:11px 12px;
+    color:#06240A;font:400 15px/1.2 "Do Hyeon",sans-serif;padding:9px 12px;
     display:flex;justify-content:space-between;align-items:center;gap:10px;
   }
   .buy:disabled{border-color:var(--edge);background:var(--raise);color:var(--ink-3);cursor:not-allowed}
@@ -371,7 +384,6 @@
     </div>
 
     <button type="button" class="tapzone" id="tapzone" aria-label="타이탄 공격">
-      <span class="party" id="party"></span>
       <span class="titanwrap">
       <svg viewBox="0 0 150 132" role="img" aria-hidden="true">
         <ellipse class="aura" cx="75" cy="70" rx="68" ry="60" fill="var(--foe-aura,#1D8C81)" opacity=".3"/>
@@ -395,6 +407,11 @@
         <path d="M75 86 L69 96 L78 96 L72 108" stroke="var(--foe-eye,#4FE3D0)" stroke-width="3"
               fill="none" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>
       </svg>
+      </span>
+      <span class="ranks">
+        <span class="side left" id="partyL"></span>
+        <span class="fighter master" id="master"></span>
+        <span class="side right" id="partyR"></span>
       </span>
     </button>
 
@@ -1032,18 +1049,26 @@ function render() {
   document.getElementById("foeCount").textContent = boss ? "보스전"
     : S.bossPending ? `${F.mobsPerStage} / ${F.mobsPerStage} · 보스 대기`
     : `${S.mob} / ${F.mobsPerStage}`;
-  // 아군 대열 — 고용한 영웅 수가 바뀔 때만 다시 그린다
-  const party = document.getElementById("party");
+  // 주인공은 한 번만 그리면 된다
+  const masterEl = document.getElementById("master");
+  if (!masterEl.dataset.built) { masterEl.dataset.built = "1"; masterEl.innerHTML = unitSvg(MASTER); }
+
+  // 좌우 대열 — 고용한 영웅 수가 바뀔 때만 다시 그린다.
+  // 짝수는 왼쪽, 홀수는 오른쪽으로 보내고 안쪽부터 채워 바깥으로 늘어나게 한다.
+  const partyL = document.getElementById("partyL");
+  const partyR = document.getElementById("partyR");
   const sig = S.heroLv.map((lv) => (lv > 0 ? 1 : 0)).join("");
-  if (party.dataset.sig !== sig) {
-    party.dataset.sig = sig;
-    let html = `<span class="fighter master atk">${unitSvg(MASTER)}</span>`;
+  if (partyL.dataset.sig !== sig) {
+    partyL.dataset.sig = sig;
+    let L = "", R = "";
     HEROES.forEach((h, i) => {
-      if (S.heroLv[i] > 0) {
-        html += `<span class="fighter atk" style="animation-delay:${(i * 0.13).toFixed(2)}s" title="${h.n}">${unitSvg(ART[i])}</span>`;
-      }
+      if (S.heroLv[i] <= 0) return;
+      const u = `<span class="fighter atk" style="animation-delay:${(i * 0.13).toFixed(2)}s" title="${h.n}">${unitSvg(ART[i])}</span>`;
+      if (i % 2 === 0) L = u + L;          // 왼쪽은 안쪽(오른쪽 끝)부터 쌓인다
+      else R += u;                          // 오른쪽은 안쪽(왼쪽 끝)부터
     });
-    party.innerHTML = html;
+    partyL.innerHTML = L;
+    partyR.innerHTML = R;
   }
 
   const rb = document.getElementById("retry");
@@ -1354,6 +1379,11 @@ function selfCheck() {
   t("영웅 수와 스프라이트 수가 같다", ART.length === HEROES.length);
   t("모든 무기가 실제로 그려진다", ART.every(a => weaponSvg(a.w, "#fff").length > 0));
   t("영웅마다 색이 다르다", new Set(ART.map(a => a.body)).size === ART.length);
+  t("영웅이 좌우로 고르게 갈린다", (() => {
+      const left = HEROES.filter((_, i) => i % 2 === 0).length;
+      const right = HEROES.length - left;
+      return Math.abs(left - right) <= 1 && left + right === HEROES.length;
+    })());
 
   if (fails.length) console.error("[균열의 티탄] 점검 실패:", fails);
   else console.info(`[균열의 티탄] 경제 점검 ${ran}항목 통과 — 2층은 tt3_sim.py 확정값과 일치`);
