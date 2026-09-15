@@ -99,15 +99,42 @@
   .thint b{font-weight:400}
   .thint b.p{color:var(--gold)} .thint b.g{color:var(--go)} .thint b.m{color:var(--ink-3)}
 
-  .dps{display:flex;gap:8px;width:100%}
-  .dps div{
-    flex:1;background:var(--raise);border:2px solid var(--edge);border-radius:8px;
-    padding:6px 8px;text-align:center;
+  .mana{width:100%}
+  .mbar{
+    position:relative;height:15px;border:2px solid #1A0F33;border-radius:8px;
+    background:#151033;overflow:hidden;
   }
-  .dps .k{font-size:10px;color:var(--ink-3);letter-spacing:.06em}
-  .dps .v{font-size:15px;text-shadow:var(--stroke)}
-  .dps .tap .v{color:var(--gold)}
-  .dps .auto .v{color:var(--rift)}
+  .mbar i{display:block;height:100%;background:linear-gradient(180deg,#8FD4FF,#2F6FD0);transition:width .12s linear}
+  .mbar span{position:absolute;inset:0;display:grid;place-items:center;font-size:10px;color:#fff;text-shadow:var(--stroke)}
+
+  .skills{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;width:100%}
+  .skill{
+    appearance:none;cursor:pointer;color:var(--ink);font:inherit;position:relative;
+    background:var(--raise);border:2px solid var(--edge);border-radius:8px;
+    padding:6px 2px 5px;display:flex;flex-direction:column;align-items:center;gap:2px;overflow:hidden;
+  }
+  .skill .ic{font-size:16px;line-height:1}
+  .skill .nm{font-size:10px;line-height:1.1;text-align:center;color:var(--ink-2)}
+  .skill .mp{font-size:10px;color:#8FD4FF}
+  .skill .key{
+    position:absolute;top:2px;left:3px;font-size:9px;color:var(--ink-3);
+  }
+  .skill.ready{border-color:var(--gold)}
+  .skill.ready .ic{color:var(--gold)}
+  .skill.on{border-color:var(--rift);background:linear-gradient(180deg,#1D8C81,var(--raise))}
+  .skill:disabled{cursor:not-allowed;opacity:.5}
+  .skill .cd{
+    position:absolute;inset:0;background:rgba(10,6,24,.72);
+    display:grid;place-items:center;font-family:"Black Han Sans",sans-serif;font-size:15px;color:var(--ink-2);
+  }
+  .skill:focus-visible{outline:2px solid var(--rift);outline-offset:-2px}
+
+  .dpsline{
+    width:100%;display:flex;justify-content:space-between;gap:10px;
+    font-size:12px;color:var(--ink-3);
+  }
+  .dpsline b{font-family:"Black Han Sans",sans-serif;font-weight:400}
+  .dpsline .t{color:var(--gold)} .dpsline .a{color:var(--rift)}
 
   .buy{
     appearance:none;width:100%;border-radius:9px;cursor:pointer;
@@ -331,9 +358,15 @@
       <div class="thint" id="thint">마커가 가운데 올 때 눌러라</div>
     </div>
 
-    <div class="dps">
-      <div class="tap"><div class="k">퍼펙트 일격</div><div class="v stat" id="tapDmg">1</div></div>
-      <div class="auto"><div class="k">영웅 DPS</div><div class="v stat" id="autoDps">0</div></div>
+    <div class="mana">
+      <div class="mbar"><i id="manaFill" style="width:0%"></i><span id="manaText">0 / 100</span></div>
+    </div>
+
+    <div class="skills" id="skills"></div>
+
+    <div class="dpsline">
+      <span>퍼펙트 일격 <b class="t" id="tapDmg">1</b></span>
+      <span>영웅 DPS <b class="a" id="autoDps">0</b></span>
     </div>
     <button type="button" class="buy" id="tapBuy">
       <span>소드 마스터 <b id="tapLv">Lv 1</b></span>
@@ -529,6 +562,44 @@ const TIMING = {
   halfMin: 0.70, halfMax: 1.00,
 };
 let mk = { pos: 0, dir: 1, half: 0.85 };
+
+/* 액티브 스킬. 마나는 자연 회복도 하지만 판정으로 더 크게 찬다 —
+   퍼펙트 +3 / 굿 +1.5 / 미스 0. 정확히 치는 보상이 스킬로 이어지고,
+   쿨다운이 하한을 잡아 연발은 막는다. 자연 회복만으로는 15~40초가 걸린다.
+   지속과 쿨다운은 '실제 시간' 기준이다 — 게임 배속을 따라가면 600x에서
+   지속이 순식간에 끝나 쓸 수 없는 버튼이 된다. */
+const MANA_MAX = 100, MANA_REGEN = 1.0, MANA_PERFECT = 3.0, MANA_GOOD = 1.5;
+const SKILLS = [
+  { id:"slash", n:"균열 일섬", ic:"⚡", key:"1", mana:20, cd:12, dur:8,  x:3, d:"일격 피해 ×3" },
+  { id:"slow",  n:"시간 지연", ic:"◷", key:"2", mana:15, cd:18, dur:8,  x:2, d:"마커가 절반 속도" },
+  { id:"gold",  n:"황금 균열", ic:"◈", key:"3", mana:25, cd:22, dur:10, x:4, d:"처치 골드 ×4" },
+  { id:"awake", n:"영웅 각성", ic:"✦", key:"4", mana:30, cd:26, dur:12, x:3, d:"영웅 DPS ×3" },
+  { id:"crush", n:"심연 붕괴", ic:"✹", key:"5", mana:40, cd:45, dur:0,  x:0.4, d:"적 최대 체력의 40%" },
+];
+const SK = Object.fromEntries(SKILLS.map((k) => [k.id, k]));
+let rt = 0;                       // 실제 경과 초 (배속과 무관)
+const buffUntil = {}, cdUntil = {};
+const buffOn = (id) => (buffUntil[id] || 0) > rt;
+const onCd   = (id) => (cdUntil[id] || 0) > rt;
+const tapBuff  = () => buffOn("slash") ? SK.slash.x : 1;
+const goldBuff = () => buffOn("gold")  ? SK.gold.x  : 1;
+const dpsBuff  = () => buffOn("awake") ? SK.awake.x : 1;
+const slowBuff = () => buffOn("slow")  ? SK.slow.x  : 1;
+
+function castSkill(id) {
+  const k = SK[id];
+  if (!k || onCd(id) || S.mana < k.mana) return false;
+  S.mana -= k.mana;
+  cdUntil[id] = rt + k.cd;
+  if (k.dur > 0) buffUntil[id] = rt + k.dur;
+  if (id === "crush") {
+    const maxHp = foeHP(S.stage) * (isBoss() ? F.bossMult : 1);
+    damage(maxHp * k.x, null, false);
+  }
+  toast(`${k.n} — ${k.d}`);
+  render();
+  return true;
+}
 function judge(pos) {
   const d = Math.abs(pos - 0.5);
   if (d <= TIMING.perfectBand) return { n: "PERFECT", mult: TIMING.perfectMult, cls: "p" };
@@ -559,7 +630,7 @@ function freshState() {
     t: START_T,
     stage: 1, mob: 1, hp: foeHP(1), bossLeft: 0,
     gold: 0, goldEarned: 0,
-    tapLv: 1, heroLv: HEROES.map(() => 0),
+    tapLv: 1, heroLv: HEROES.map(() => 0), mana: 0,
     totalRelics: 0, prestiges: 0, bestStage: 1,
     engraveLv: 0, riftBalance: 0, riftUnits: 0, riftFromChain: 0,
     stacks: [], nextStackT: START_T + CFG.stackIntervalH,
@@ -573,7 +644,7 @@ const relicMult   = () => Math.pow(1 + S.totalRelics, 0.35);
 const engraveMult = () => Math.pow(1.02, S.engraveLv);
 const permMult    = () => relicMult() * engraveMult() * S.blessingMult;
 const tapDamage   = () => (1 + S.tapLv) * permMult();
-const autoDps     = () => S.heroLv.reduce((a, lv, i) => a + heroDps(i, lv), 0) * permMult();
+const autoDps     = () => S.heroLv.reduce((a, lv, i) => a + heroDps(i, lv), 0) * permMult() * dpsBuff();
 const isBoss      = () => S.mob >= F.mobsPerStage;
 const growthUnits = () => S.goldEarned + S.riftUnits;
 
@@ -583,7 +654,7 @@ function spawn() {
   S.bossLeft = isBoss() ? F.bossSeconds : 0;
 }
 function killReward(evt) {
-  const g = foeGold(S.stage) * (isBoss() ? F.bossMult : 1) * S.blessingMult;
+  const g = foeGold(S.stage) * (isBoss() ? F.bossMult : 1) * S.blessingMult * goldBuff();
   S.gold += g; S.goldEarned += g;
   if (evt) pop(evt, "+" + fmt(g), "gold");
   if (isBoss()) {
@@ -607,9 +678,12 @@ function onTap(evt) {
   z.classList.remove("hit"); void z.offsetWidth; z.classList.add("hit");
 
   const j = judge(mk.pos);
-  damage(tapDamage() * j.mult, evt, j.cls === "p");
+  damage(tapDamage() * j.mult * tapBuff(), evt, j.cls === "p");
+  S.mana = Math.min(MANA_MAX, S.mana +
+    (j.cls === "p" ? MANA_PERFECT : j.cls === "g" ? MANA_GOOD : 0));
 
   const hint = document.getElementById("thint");
+  if (!evt) pop(null, j.n, j.cls === "p" ? "crit" : "");
   hint.innerHTML = `<b class="${j.cls}">${j.n}</b> ×${j.mult}`;
   clearTimeout(hintTimer);
   hintTimer = setTimeout(() => { hint.textContent = "마커가 가운데 올 때 눌러라"; }, 900);
@@ -858,7 +932,36 @@ function render() {
   tz.style.setProperty("--foe-horn", boss ? "#C0453F" : "#6B4FA8");
   tz.style.setProperty("--foe-aura", boss ? "#8C1A16" : "#1D8C81");
 
-  document.getElementById("tapDmg").textContent = fmt(tapDamage() * TIMING.perfectMult);
+  document.getElementById("tapDmg").textContent = fmt(tapDamage() * TIMING.perfectMult * tapBuff());
+
+  // 마나
+  document.getElementById("manaFill").style.width = (S.mana / MANA_MAX * 100).toFixed(1) + "%";
+  document.getElementById("manaText").textContent = Math.floor(S.mana) + " / " + MANA_MAX;
+
+  // 스킬
+  const sw = document.getElementById("skills");
+  if (!sw.dataset.built) {
+    sw.dataset.built = "1";
+    sw.innerHTML = SKILLS.map((k) => `
+      <button type="button" class="skill" data-skill="${k.id}" title="${k.n} — ${k.d}">
+        <span class="key">${k.key}</span>
+        <span class="ic">${k.ic}</span>
+        <span class="nm">${k.n}</span>
+        <span class="mp">${k.mana}</span>
+        <span class="cd" hidden></span>
+      </button>`).join("");
+    sw.querySelectorAll("[data-skill]").forEach((b) =>
+      b.addEventListener("click", () => castSkill(b.dataset.skill)));
+  }
+  SKILLS.forEach((k) => {
+    const b = sw.querySelector(`[data-skill="${k.id}"]`);
+    const cd = onCd(k.id), on = buffOn(k.id), afford = S.mana >= k.mana;
+    b.className = "skill" + (on ? " on" : (!cd && afford) ? " ready" : "");
+    b.disabled = cd || !afford;
+    const cdEl = b.querySelector(".cd");
+    cdEl.hidden = !cd;
+    if (cd) cdEl.textContent = Math.ceil((cdUntil[k.id] - rt));
+  });
   document.getElementById("autoDps").textContent = fmt(autoDps());
   const tc = tapCost(S.tapLv);
   document.getElementById("tapLv").textContent = "Lv " + S.tapLv;
@@ -1024,6 +1127,7 @@ function load() {
     const d = JSON.parse(raw);
     if (!d?.s) return false;
     S = d.s;
+    if (typeof S.mana !== "number") S.mana = 0;   // 마나 도입 이전 저장본
     if (typeof d.speed === "number") speed = d.speed;
     // 자리를 비운 동안에도 영웅은 싸우고 균열은 맺힌다. 수령이 없으니 연쇄만 끊긴다.
     const away = Math.min(Math.max(0, (Date.now() - (d.at || Date.now())) / 1000) * speed, CFG.offlineCapH);
@@ -1044,7 +1148,9 @@ function frame(ts) {
   if (!paused) {
     // 마커는 게임 배속이 아니라 실제 시간으로 움직인다 — 배속에 따라
     // 빨라지면 사람이 맞힐 수 없는 판정이 된다.
-    mk.pos += (dt / mk.half) * mk.dir;
+    rt += dt;
+    S.mana = Math.min(MANA_MAX, S.mana + MANA_REGEN * dt);
+    mk.pos += (dt / (mk.half * slowBuff())) * mk.dir;
     if (mk.pos >= 1) { mk.pos = 1; mk.dir = -1; }
     else if (mk.pos <= 0) { mk.pos = 0; mk.dir = 1; }
     const m = document.getElementById("marker");
@@ -1096,6 +1202,14 @@ function selfCheck() {
     TIMING.perfectMult / TIMING.halfMax > 5);
   t("주기가 흔들려 고정 간격 매크로를 막는다", TIMING.halfMax > TIMING.halfMin);
 
+  // 스킬 · 마나
+  t("스킬 키가 1~5로 겹치지 않는다", new Set(SKILLS.map(k => k.key)).size === SKILLS.length);
+  t("모든 스킬이 최대 마나 안에서 쓸 수 있다", SKILLS.every(k => k.mana <= MANA_MAX));
+  t("퍼펙트가 굿보다 마나를 더 준다", MANA_PERFECT > MANA_GOOD && MANA_GOOD > 0);
+  t("판정으로 차는 쪽이 자연 회복보다 빠르다", MANA_PERFECT / TIMING.halfMax > MANA_REGEN);
+  t("쿨다운이 지속보다 길다 (상시 유지 불가)", SKILLS.every(k => k.cd > k.dur));
+  t("즉발 스킬은 지속이 없다", SK.crush.dur === 0);
+
   if (fails.length) console.error("[균열의 티탄] 점검 실패:", fails);
   else console.info(`[균열의 티탄] 경제 점검 ${ran}항목 통과 — 2층은 tt3_sim.py 확정값과 일치`);
 }
@@ -1131,6 +1245,20 @@ function start() {
   }
   for (const tab of document.querySelectorAll('[role="tab"]')) tab.addEventListener("click", () => showTab(tab.id));
   document.getElementById("tapzone").addEventListener("pointerdown", onTap);
+
+  // 스페이스로 타격, 1~5로 스킬. 전투 탭에서만, 그리고 키를 누르고 있어도
+  // 자동 반복으로 연타되지 않게 repeat를 막는다.
+  window.addEventListener("keydown", (e) => {
+    if (paused || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (document.getElementById("viewFight").hidden) return;
+    if (e.code === "Space") {
+      e.preventDefault();
+      onTap(null);
+      return;
+    }
+    const k = SKILLS.find((x) => x.key === e.key);
+    if (k) { e.preventDefault(); castSkill(k.id); }
+  });
   document.getElementById("tapBuy").addEventListener("click", buyTap);
   document.getElementById("collect").addEventListener("click", (e) => { collect(e); save(); });
   document.getElementById("prestige").addEventListener("click", prestige);
